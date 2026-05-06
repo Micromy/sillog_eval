@@ -3,7 +3,7 @@ from atlassian import Jira
 from bs4 import BeautifulSoup
 
 
-def get_all_issues(jql=""):
+def get_all_issues(jql: str = "") -> list[dict]:
     jira = Jira(url=os.environ.get("JIRA_URL"),
             username=os.environ.get("JIRA_USERNAME"),
             password=os.environ.get("JIRA_PASSWORD"),
@@ -11,7 +11,7 @@ def get_all_issues(jql=""):
 
     start = 0
     limit = 500
-    all_issues = []
+    all_issues: list[dict] = []
 
     while True:
         result = jira.jql(
@@ -31,7 +31,7 @@ def get_all_issues(jql=""):
     return all_issues
 
 
-def get_jql_filter(filter_id):
+def get_jql_filter(filter_id: str) -> str:
     jira = Jira(url=os.environ.get("JIRA_URL"),
         username=os.environ.get("JIRA_USERNAME"),
         password=os.environ.get("JIRA_PASSWORD"),
@@ -41,9 +41,9 @@ def get_jql_filter(filter_id):
     return filter["jql"]
 
 
-def split_jira_sections(description_html: str) -> dict:
+def split_jira_sections(description_html: str) -> dict[str, str]:
     soup = BeautifulSoup(description_html, "html.parser")
-    sections = {"description": "", "checklist": "", "outputs": ""}
+    sections: dict[str, str] = {"description": "", "checklist": "", "outputs": ""}
 
     for block in soup.select("div.jefolding"):
         head = block.select_one("div.jefolding_head")
@@ -64,7 +64,7 @@ def split_jira_sections(description_html: str) -> dict:
     return sections
 
 
-def get_sections_by_key(jql=""):
+def get_sections_by_key(jql: str = "") -> dict[str, dict[str, str]]:
     issues = get_all_issues(jql)
     sections_by_key = {issue['key']: split_jira_sections(issue['fields']['description']) for issue in issues}
     return sections_by_key

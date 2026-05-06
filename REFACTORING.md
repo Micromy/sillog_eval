@@ -196,9 +196,18 @@ refactor: to_raw_dict를 common/convert.py로 추출
 refactor: wildcard import 제거 (llm.py, main.py)
 ```
 
-#### 4-2. 타입 힌트 보강 ⬜ 예정
+#### 4-2. 타입 힌트 보강 ✅
 
-`jira.py`, `storage.py`, `main.py` 등에 타입 힌트 추가.
+`jira.py`, `storage.py`, `main.py`에 함수 시그니처 타입 힌트 추가.
+
+**변경 파일:**
+- `jira.py` — 4개 함수 모두 인자/반환 타입 (`get_all_issues -> list[dict]`, `get_jql_filter(filter_id: str) -> str`, `split_jira_sections(description_html: str) -> dict[str, str]`, `get_sections_by_key -> dict[str, dict[str, str]]`)
+- `storage.py` — `save_pkl(path: Path, data: Any) -> None`, `load_pkl(path: Path) -> Any`, `save_json(path: Path, data: Any) -> None`. 미사용 `output = ""` 변수 제거.
+- `main.py` — `def run() -> list`, `model_name: str` 명시
+
+```
+refactor: jira.py / storage.py / main.py 타입 힌트 보강
+```
 
 #### 4-3. 에러 핸들링 패턴 통일 ⬜ 예정
 

@@ -13,8 +13,8 @@ from .parsing_llm import parse_issues_parallel
 from .score_async import score_issues_batch
 
 
-def run():
-    model_name = DTGPT_MODEL if PLATFORM == 'DTGPT' else DS_LLM_MODEL if PLATFORM == 'DS_LLM' else ""
+def run() -> list:
+    model_name: str = DTGPT_MODEL if PLATFORM == 'DTGPT' else DS_LLM_MODEL if PLATFORM == 'DS_LLM' else ""
 
     sections_file_path = STORAGE_DIR / "jira_issues.pkl"
     if sections_file_path.exists():
