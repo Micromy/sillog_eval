@@ -25,6 +25,7 @@
 | 4-3. `parse/llm_parser.py` 에러 수집/리포트 | ✅ |
 | **R-1. task-dispatch 구조로 재편성** | ✅ (2026-05-06) |
 | **R-2. task entry / common 인터페이스 분리** | ✅ (2026-05-06) |
+| **R-3. 하드코딩 상수 중앙화 (constants.py + db/schema.py)** | ✅ (2026-05-06) |
 
 ### R-1: 디렉토리 재편성
 

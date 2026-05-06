@@ -12,13 +12,22 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from common.constants import (
+    BACKUP_SUFFIX,
+    ITEMS_SUBDIR,
+    META_FILENAME,
+    PassFail,
+    RuleType,
+    SupervisorStatus,
+)
+
 
 # ── 자연어 total_summary 파싱 ──────────────────────
 
 def parse_total_summary(text: str) -> Dict:
     if not text:
         return {
-            "status": "unknown",
+            "status": SupervisorStatus.UNKNOWN,
             "approved": False,
             "supervisor_failed": False,
             "feedback": "",
@@ -29,7 +38,7 @@ def parse_total_summary(text: str) -> Dict:
         }
 
     result = {
-        "status": "unknown",
+        "status": SupervisorStatus.UNKNOWN,
         "approved": False,
         "supervisor_failed": False,
         "feedback": "",
@@ -43,13 +52,13 @@ def parse_total_summary(text: str) -> Dict:
     if status_match:
         status_label = status_match.group(1).strip()
         if status_label == "승인":
-            result["status"] = "approved"
+            result["status"] = SupervisorStatus.APPROVED
             result["approved"] = True
         elif status_label == "미승인":
-            result["status"] = "not_approved"
+            result["status"] = SupervisorStatus.NOT_APPROVED
             result["approved"] = False
         elif status_label == "감독관 검토 실패":
-            result["status"] = "supervisor_failed"
+            result["status"] = SupervisorStatus.SUPERVISOR_FAILED
             result["supervisor_failed"] = True
 
     meta_match = re.search(
@@ -104,9 +113,9 @@ def recalc_stats_from_items(items_dir: Path) -> Tuple[Dict, List]:
             with open(item_file, encoding="utf-8") as f:
                 item = json.load(f)
             rule_type = item.get("rule_type", "")
-            if rule_type == "QUANTITATIVE":
+            if rule_type == RuleType.QUANTITATIVE:
                 quant_results.append(item)
-            elif rule_type == "QUALITATIVE":
+            elif rule_type == RuleType.QUALITATIVE:
                 qual_results.append(item)
         except Exception as e:
             print(f"    [warn] {item_file.name} 로드 실패: {e}", file=sys.stderr)
@@ -116,9 +125,9 @@ def recalc_stats_from_items(items_dir: Path) -> Tuple[Dict, List]:
 
     def stats_for(results):
         total = len(results)
-        p = count(results, "PASS")
-        pa = count(results, "PARTIAL")
-        f = count(results, "FAIL")
+        p = count(results, PassFail.PASS)
+        pa = count(results, PassFail.PARTIAL)
+        f = count(results, PassFail.FAIL)
         return {
             "total": total,
             "pass": p,
@@ -215,7 +224,7 @@ def migrate_meta_file(meta_path: Path, dry_run: bool = False) -> bool:
     if "summary" in meta:
         return False
 
-    items_dir = meta_path.parent / "items"
+    items_dir = meta_path.parent / ITEMS_SUBDIR
     summary = build_summary_from_legacy(meta, items_dir)
 
     new_meta = {}
@@ -236,7 +245,7 @@ def migrate_meta_file(meta_path: Path, dry_run: bool = False) -> bool:
               f"errors={summary['errors']['count']}")
         return True
 
-    backup_path = meta_path.with_suffix(meta_path.suffix + ".bak")
+    backup_path = meta_path.with_suffix(meta_path.suffix + BACKUP_SUFFIX)
     shutil.copy2(meta_path, backup_path)
 
     with open(meta_path, "w", encoding="utf-8") as f:
@@ -262,7 +271,7 @@ def find_meta_files(storage_dir: Path, model_filter: Optional[str] = None):
         for key_dir in sorted(final_dir.iterdir()):
             if not key_dir.is_dir():
                 continue
-            meta_path = key_dir / "_meta.json"
+            meta_path = key_dir / META_FILENAME
             if meta_path.exists():
                 yield meta_path
 

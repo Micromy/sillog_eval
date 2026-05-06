@@ -7,13 +7,14 @@
 import sys
 
 from common.config import LLM_POOL_SIZE, STORAGE_DIR
+from common.constants import JIRA_CACHE_FILENAME
 from common.llm import create_llm
 from common.storage import load_pkl
 from common.jira.llm_parser import parse_issues_parallel
 
 
 def run() -> None:
-    sections_file_path = STORAGE_DIR / "jira_issues.pkl"
+    sections_file_path = STORAGE_DIR / JIRA_CACHE_FILENAME
     if not sections_file_path.exists():
         print(f"[parse_description] {sections_file_path} 없음. 먼저 fetch_jira 실행 필요.", file=sys.stderr)
         sys.exit(1)

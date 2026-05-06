@@ -107,23 +107,54 @@
 | 단일 Issue future | `ISSUE_TIMEOUT` 초과 시 FATAL 처리 (round=0, summary에 `[FATAL]`) |
 | DB 단건 적재 | 트랜잭션 rollback + raise → 호출자에서 결정 |
 
-## 8. 코드 컨벤션 / 진행 중인 정정
+## 8. 상수 / 하드코딩 관리 정책
 
-`REFACTORING.md` SOT. 이미 적용된 것:
+`REFACTORING.md` SOT. 모든 정적 상수는 다음 3개 파일에 모음:
 
-- `db.fetch_one`/`fetch_all` → `db.fetch`/`db.select`로 호출부 통일
-- `task_excution_method` → `task_execution_method` 오타 정정 (models, extractor, persistence)
-- 공통 문자열 유틸 `common/text.py` 추출 (`truncate`/`clob_or_none`/`safe_dict`/`safe_list`), `_` private 접두 제거
+| 파일 | 역할 |
+|------|------|
+| `common/config.py` | env 기반 동적 설정 (타임아웃, 워커 수, FILTER_ID, JIRA_VERIFY_SSL, MIGRATION_USER 등) |
+| `common/constants.py` | env 무관 정적 상수 (상태 코드, 매직 ID, 경로 이름, 청크 크기, SCORE_MAP) |
+| `common/db/schema.py` | DB 테이블별 VARCHAR2 byte 길이 (DDL과 일치) |
 
-진행 예정 (현재 미적용):
-- `extractor.py` dict/Pydantic 분기 중복 제거 (`to_raw_dict()` 한 번 통과 후 dict 단일 경로)
-- `score_async.py`의 저장 함수를 `scorer/storage.py`로 이전, 루트 `storage.py` 역할 정리
-- `main.py`를 `def main()` + `if __name__ == "__main__"` 형태로
-- `llm.py`의 `from config import *` 명시 import로 변경
-- 타입 힌트 / 에러 핸들링 패턴 보강
+### 8-1. 상태 코드 (`common/constants.py`)
+```python
+PassFail.{PASS, PARTIAL, FAIL}
+RuleType.{QUANTITATIVE, QUALITATIVE}
+ParentType.{INPUT, OUTPUT}
+GradeCode.{APPROVED, NOT_APPROVED, SUPERVISOR_FAILED}
+SupervisorStatus.{APPROVED, NOT_APPROVED, SUPERVISOR_FAILED, UNKNOWN}
+YN.{YES, NO}
+```
+
+문자열 비교(`pass_fail == "PASS"`) 대신 `PassFail.PASS`로 사용해 오타 방지.
+
+### 8-2. 매직 ID / 경로
+| 상수 | 값 | 설명 |
+|------|-----|------|
+| `JIRA_KEY_ATTR_MASTER_ID` | 17 | sillog_tasks_attr 매핑용 |
+| `JIRA_CACHE_FILENAME` | `"jira_issues.pkl"` | fetch_jira 출력 |
+| `PARSED_SUBDIR` | `"parsed"` | parse_description 출력 디렉토리 |
+| `FINAL_SUBDIR` | `"final"` | 평가 최종 결과 |
+| `ITEMS_SUBDIR` | `"items"` | 항목별 결과 |
+| `ITERATION_SUBDIR` | `"iteration"` | 라운드별 스냅샷 |
+| `META_FILENAME` | `"_meta.json"` | 평가 메타 |
+| `LOAD_ERROR_PREFIX` | `"_load_errors_"` | upload_parsed 실패 로그 |
+| `PARSE_ERROR_PREFIX` | `"_parse_errors_"` | parse_description 실패 로그 |
+| `BACKUP_SUFFIX` | `".bak"` | migrate_meta 백업 |
+| `JIRA_FETCH_LIMIT` | 500 | JQL 페이지당 최대 |
+| `ORACLE_IN_CHUNK_SIZE` | 500 | Oracle IN 절 1000개 제한 회피 |
+
+### 8-3. DB 컬럼 길이 (`common/db/schema.py`)
+테이블 별 dict로 정의: `PARSED_COLUMN_BYTES`, `INPUT_COLUMN_BYTES`, `OUTPUT_COLUMN_BYTES`, `MANAGER_COLUMN_BYTES`, `RESULT_COLUMN_BYTES`. DDL 변경 시 이 dict만 수정.
+
+```python
+truncate(value, PARSED_COLUMN_BYTES["purpose"])  # 2000 byte
+```
 
 ## 9. 보안 / 자료 취급
 
-- `config.py`는 템플릿. 실제 토큰/URL/프롬프트는 `.env` 또는 로컬 수정본에서 관리하고 **커밋 금지**
+- `common/config.py`는 템플릿. 실제 토큰/URL/프롬프트는 `.env` 또는 로컬 수정본에서 관리하고 **커밋 금지**
 - Jira / Oracle 자격은 `os.environ`에서만 읽음 (코드에 하드코딩 X)
-- DB 접속 SSL/검증 옵션은 환경에 따름. Jira는 `verify_ssl=False` (사내 인증서 환경 전제)
+- DB 접속 SSL/검증 옵션은 환경에 따름. Jira는 `JIRA_VERIFY_SSL` env (default `false` — 사내 self-signed cert 환경 전제)
+- `MIGRATION_USER`로 `created_by`/`updated_by` 일괄 통일 (default `"migration"`)

@@ -281,6 +281,34 @@ refactor: task entry / common 인터페이스 분리 (헬퍼 모두 common/으�
 
 ---
 
+### R-3. 하드코딩 상수 중앙화 ✅
+
+코드 곳곳에 흩어진 매직 값(상태 코드, DB 컬럼 길이, 매직 ID, 경로명, 청크 크기 등)을 3개 파일로 모음.
+
+**신규/확장 파일:**
+- `common/constants.py` (NEW) — env 무관 정적 상수
+  - 상태 코드 클래스: `PassFail`, `RuleType`, `ParentType`, `GradeCode`, `SupervisorStatus`, `YN`
+  - 매직 ID: `JIRA_KEY_ATTR_MASTER_ID = 17`
+  - 경로/파일명: `JIRA_CACHE_FILENAME`, `PARSED_SUBDIR`, `FINAL_SUBDIR`, `ITEMS_SUBDIR`, `ITERATION_SUBDIR`, `META_FILENAME`, `LOAD_ERROR_PREFIX`, `PARSE_ERROR_PREFIX`, `BACKUP_SUFFIX`
+  - 청크 크기: `JIRA_FETCH_LIMIT`, `ORACLE_IN_CHUNK_SIZE`
+  - `SCORE_MAP` (config.py에서 이전)
+- `common/db/schema.py` (NEW) — 테이블별 VARCHAR2 byte 한계 dict
+  - `PARSED_COLUMN_BYTES`, `INPUT_COLUMN_BYTES`, `OUTPUT_COLUMN_BYTES`, `MANAGER_COLUMN_BYTES`, `RESULT_COLUMN_BYTES`
+- `common/config.py` 확장 — `JIRA_VERIFY_SSL` (env), `MIGRATION_USER` (env, default "migration")
+
+**치환 효과:**
+- `pass_fail == "PASS"` → `pass_fail == PassFail.PASS` (수십 곳)
+- `truncate(x, 2000)` → `truncate(x, PARSED_COLUMN_BYTES["purpose"])` (11+ 곳)
+- `attr_master_id = 17` → bind param + `JIRA_KEY_ATTR_MASTER_ID` (2곳)
+- `verify_ssl=False` → `JIRA_VERIFY_SSL` env 기반
+- `created_by="migration"` → `MIGRATION_USER` (10+ 곳)
+
+```
+refactor: 하드코딩 값을 common/constants.py + common/db/schema.py로 중앙화
+```
+
+---
+
 ## 정리 규칙
 
 - 코드 변경 시 커밋 메시지 함께 기록

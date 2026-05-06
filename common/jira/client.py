@@ -2,41 +2,40 @@ import os
 from atlassian import Jira
 from bs4 import BeautifulSoup
 
+from common.config import JIRA_VERIFY_SSL
+from common.constants import JIRA_FETCH_LIMIT
+
+
+def _make_client() -> Jira:
+    return Jira(
+        url=os.environ.get("JIRA_URL"),
+        username=os.environ.get("JIRA_USERNAME"),
+        password=os.environ.get("JIRA_PASSWORD"),
+        verify_ssl=JIRA_VERIFY_SSL,
+    )
+
 
 def get_all_issues(jql: str = "") -> list[dict]:
-    jira = Jira(url=os.environ.get("JIRA_URL"),
-            username=os.environ.get("JIRA_USERNAME"),
-            password=os.environ.get("JIRA_PASSWORD"),
-            verify_ssl=False)
+    jira = _make_client()
 
     start = 0
-    limit = 500
     all_issues: list[dict] = []
 
     while True:
-        result = jira.jql(
-            jql,
-            start=start,
-            limit=limit
-        )
-
+        result = jira.jql(jql, start=start, limit=JIRA_FETCH_LIMIT)
         issues = result["issues"]
         all_issues.extend(issues)
 
-        if len(issues) < limit:
+        if len(issues) < JIRA_FETCH_LIMIT:
             break
 
-        start += limit
+        start += JIRA_FETCH_LIMIT
 
     return all_issues
 
 
 def get_jql_filter(filter_id: str) -> str:
-    jira = Jira(url=os.environ.get("JIRA_URL"),
-        username=os.environ.get("JIRA_USERNAME"),
-        password=os.environ.get("JIRA_PASSWORD"),
-        verify_ssl=False)
-
+    jira = _make_client()
     filter = jira.get_filter(filter_id)
     return filter["jql"]
 

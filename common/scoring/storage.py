@@ -15,21 +15,28 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
+from common.constants import (
+    FINAL_SUBDIR,
+    ITEMS_SUBDIR,
+    ITERATION_SUBDIR,
+    META_FILENAME,
+    RuleType,
+)
 from .base import ChecklistResult
 
 
 # ── 경로 헬퍼 ───────────────────────────────────────
 
 def _final_dir(storage_dir, model_name, key):
-    return Path(storage_dir) / model_name / "final" / key
+    return Path(storage_dir) / model_name / FINAL_SUBDIR / key
 
 
 def _items_dir(storage_dir, model_name, key):
-    return _final_dir(storage_dir, model_name, key) / "items"
+    return _final_dir(storage_dir, model_name, key) / ITEMS_SUBDIR
 
 
 def _iteration_dir(storage_dir, model_name, key):
-    return Path(storage_dir) / model_name / "iteration" / key
+    return Path(storage_dir) / model_name / ITERATION_SUBDIR / key
 
 
 # ── 저장 ────────────────────────────────────────────
@@ -58,7 +65,7 @@ def save_meta(storage_dir, model_name, key, score, eval_seq, review_history, sum
     """전체 메타 정보 저장 (EVAL_TASK_RESULT 매핑)"""
     final_dir = _final_dir(storage_dir, model_name, key)
     final_dir.mkdir(parents=True, exist_ok=True)
-    filepath = final_dir / "_meta.json"
+    filepath = final_dir / META_FILENAME
 
     data = {
         "key": key,
@@ -141,7 +148,7 @@ def load_previous_results(storage_dir, model_name, key):
                     pass_fail=item["pass_fail"],
                     reasoning=item["reasoning"],
                 )
-                if item.get("rule_type") == "QUANTITATIVE":
+                if item.get("rule_type") == RuleType.QUANTITATIVE:
                     quant_map[result.criterion_name] = result
                 else:
                     qual_map[result.criterion_name] = result

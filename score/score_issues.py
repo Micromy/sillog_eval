@@ -13,12 +13,13 @@ from common.config import (
     LLM_POOL_SIZE,
     STORAGE_DIR,
 )
+from common.constants import PARSED_SUBDIR
 from common.llm import create_llm
 from common.scoring.scorer import score_issues_batch
 
 
 def run() -> None:
-    parsed_dir = STORAGE_DIR / "parsed"
+    parsed_dir = STORAGE_DIR / PARSED_SUBDIR
     if not parsed_dir.exists():
         print(f"[score_issues] {parsed_dir} 없음. 먼저 parse_description 실행 필요.", file=sys.stderr)
         sys.exit(1)

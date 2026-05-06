@@ -26,6 +26,10 @@ DS_LLM_HEADER = {}  # 실제 헤더는 로컬에서 설정
 
 # ── Jira ────────────────────────────────────────────
 FILTER_ID = os.environ.get("FILTER_ID", "")
+JIRA_VERIFY_SSL = os.environ.get("JIRA_VERIFY_SSL", "false").lower() in ("1", "true", "yes")
+
+# ── 운영 ────────────────────────────────────────────
+MIGRATION_USER = os.environ.get("MIGRATION_USER", "migration")
 
 # ── LLM 풀 ─────────────────────────────────────────
 LLM_POOL_SIZE = int(os.environ.get("LLM_POOL_SIZE", "5"))
@@ -35,9 +39,6 @@ STORAGE_DIR = Path(os.environ.get(
     "SCORER_STORAGE_DIR",
     r"C:\Users\sh0913.park\Documents\evaluation_result\SilLog-Vanguard",
 ))
-
-# ── 점수 ────────────────────────────────────────────
-SCORE_MAP = {"PASS": 1.0, "PARTIAL": 0.5, "FAIL": 0.0}
 
 # ── 타임아웃/동시성 ──────────────────────────────────
 LLM_TIMEOUT = int(os.environ.get("SCORER_LLM_TIMEOUT", "120"))

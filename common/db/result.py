@@ -21,6 +21,19 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from common import db
+from common.config import MIGRATION_USER
+from common.constants import (
+    FINAL_SUBDIR,
+    GradeCode,
+    ITEMS_SUBDIR,
+    JIRA_KEY_ATTR_MASTER_ID,
+    META_FILENAME,
+    PassFail,
+    SCORE_MAP,
+    SupervisorStatus,
+    YN,
+)
+from common.db.schema import RESULT_COLUMN_BYTES
 from common.text import truncate
 
 
@@ -56,8 +69,9 @@ def lookup_task_id(cur, jira_key: str) -> Optional[int]:
         """
         SELECT task_id
         FROM sillog_tasks_attr
-        WHERE attr_master_id = 17 AND attr_value = :key
+        WHERE attr_master_id = :master_id AND attr_value = :key
         """,
+        master_id=JIRA_KEY_ATTR_MASTER_ID,
         key=jira_key,
     )
     row = cur.fetchone()
@@ -116,7 +130,7 @@ def insert_result(
         ) VALUES (
             :task_id, :rsid, :seq,
             :total_score, :grade_code, :eval_count,
-            :eval_summary, 'Y',
+            :eval_summary, :is_latest,
             :evaluated_at, :evaluated_by,
             :model_name,
             :created_at, :created_by, :updated_at, :updated_by
@@ -129,14 +143,15 @@ def insert_result(
         total_score=summary.get("final_score"),
         grade_code=_grade_from_status(supervisor.get("status")),
         eval_count=summary.get("rounds_used"),
-        eval_summary=truncate(meta.get("total_summary"), 2000),
+        eval_summary=truncate(meta.get("total_summary"), RESULT_COLUMN_BYTES["eval_summary"]),
+        is_latest=YN.YES,
         evaluated_at=migration_time,
-        evaluated_by="migration",
-        model_name=truncate(model_name, 100),
+        evaluated_by=MIGRATION_USER,
+        model_name=truncate(model_name, RESULT_COLUMN_BYTES["model_name"]),
         created_at=migration_time,
-        created_by="migration",
+        created_by=MIGRATION_USER,
         updated_at=migration_time,
-        updated_by="migration",
+        updated_by=MIGRATION_USER,
         out_id=task_eval_id_var,
     )
     return int(task_eval_id_var.getvalue()[0])
@@ -168,7 +183,7 @@ def insert_result_items(
             unmapped.append(criterion_name)
             continue
 
-        pass_fail = item.get("pass_fail", "FAIL")
+        pass_fail = item.get("pass_fail", PassFail.FAIL)
         raw_score = _score_from_pass_fail(pass_fail)
 
         cur.execute(
@@ -188,11 +203,11 @@ def insert_result_items(
             raw_sc=raw_score,
             weighted=raw_score,
             pass_yn=_pass_yn(pass_fail),
-            cmt=truncate(item.get("reasoning"), 1000),
+            cmt=truncate(item.get("reasoning"), RESULT_COLUMN_BYTES["comment_summary"]),
             created_at=migration_time,
-            created_by="migration",
+            created_by=MIGRATION_USER,
             updated_at=migration_time,
-            updated_by="migration",
+            updated_by=MIGRATION_USER,
         )
         success += 1
 
@@ -217,11 +232,11 @@ def insert_result_reviews(
             )
             """,
             tid=task_eval_id,
-            feedback=truncate(entry.get("feedback"), 4000),
+            feedback=truncate(entry.get("feedback"), RESULT_COLUMN_BYTES["feedback"]),
             seq=entry.get("round"),
             elapsed=None,
             created_at=migration_time,
-            created_by="migration",
+            created_by=MIGRATION_USER,
         )
         count += 1
     return count
@@ -257,10 +272,10 @@ def insert_item_reviews(
                 """,
                 tid=task_eval_id,
                 rid=eval_rule_item_id,
-                review=truncate(issue.get("reason"), 4000),
-                suggestion=truncate(issue.get("suggestion"), 4000),
+                review=truncate(issue.get("reason"), RESULT_COLUMN_BYTES["review"]),
+                suggestion=truncate(issue.get("suggestion"), RESULT_COLUMN_BYTES["suggestion"]),
                 created_at=migration_time,
-                created_by="migration",
+                created_by=MIGRATION_USER,
             )
             success += 1
 
@@ -278,8 +293,8 @@ def migrate_one(
 ) -> dict:
     """단일 key 디렉토리 마이그레이션"""
     key = key_dir.name
-    meta_path = key_dir / "_meta.json"
-    items_dir = key_dir / "items"
+    meta_path = key_dir / META_FILENAME
+    items_dir = key_dir / ITEMS_SUBDIR
 
     if not meta_path.exists():
         return {"key": key, "status": "skipped", "error": "_meta.json 없음"}
@@ -365,7 +380,7 @@ def migrate(
     model_name: str,
     keys: Optional[List[str]] = None,
 ) -> None:
-    final_dir = storage_dir / model_name / "final"
+    final_dir = storage_dir / model_name / FINAL_SUBDIR
     if not final_dir.exists():
         print(f"[error] 디렉토리 없음: {final_dir}")
         sys.exit(1)
@@ -437,19 +452,20 @@ def migrate(
 # ── 유틸 ─────────────────────────────────────────
 
 def _score_from_pass_fail(pass_fail: str) -> float:
-    return {"PASS": 1.0, "PARTIAL": 0.5, "FAIL": 0.0}.get(pass_fail, 0.0)
+    return SCORE_MAP.get(pass_fail, 0.0)
 
 
 def _pass_yn(pass_fail: str) -> str:
-    return "Y" if pass_fail == "PASS" else "N"
+    return YN.YES if pass_fail == PassFail.PASS else YN.NO
+
+
+_STATUS_TO_GRADE = {
+    SupervisorStatus.APPROVED: GradeCode.APPROVED,
+    SupervisorStatus.NOT_APPROVED: GradeCode.NOT_APPROVED,
+    SupervisorStatus.SUPERVISOR_FAILED: GradeCode.SUPERVISOR_FAILED,
+}
 
 
 def _grade_from_status(status: Optional[str]) -> Optional[str]:
     """supervisor.status → grade_code 매핑"""
-    if status == "approved":
-        return "APPROVED"
-    if status == "not_approved":
-        return "NOT_APPRV"
-    if status == "supervisor_failed":
-        return "SUP_FAIL"
-    return None
+    return _STATUS_TO_GRADE.get(status)

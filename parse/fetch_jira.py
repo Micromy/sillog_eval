@@ -4,12 +4,13 @@
 이전 단계의 캐시가 있으면 그대로 사용 (idempotent).
 """
 from common.config import FILTER_ID, STORAGE_DIR
+from common.constants import JIRA_CACHE_FILENAME
 from common.storage import save_pkl
 from common.jira.client import get_jql_filter, get_sections_by_key
 
 
 def run() -> None:
-    sections_file_path = STORAGE_DIR / "jira_issues.pkl"
+    sections_file_path = STORAGE_DIR / JIRA_CACHE_FILENAME
     if sections_file_path.exists():
         print(f"[fetch_jira] 캐시 존재, 스킵: {sections_file_path}")
         return

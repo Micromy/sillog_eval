@@ -6,6 +6,7 @@ No LLM required, structured field validation
 from typing import Dict, List, Tuple, Optional
 import re
 
+from common.constants import PassFail
 from ..base import QUANTITATIVE_CHECKLIST, ChecklistResult
 
 
@@ -72,16 +73,16 @@ class QuantitativeEvaluator:
 
         evaluator = evaluators.get(criterion_name)
         if not evaluator:
-            return "FAIL", "알 수 없는 기준입니다."
+            return PassFail.FAIL, "알 수 없는 기준입니다."
 
         score, reasoning = evaluator()
 
         if score >= 0.8:
-            return "PASS", reasoning
+            return PassFail.PASS, reasoning
         elif score >= 0.4:
-            return "PARTIAL", reasoning
+            return PassFail.PARTIAL, reasoning
         else:
-            return "FAIL", reasoning
+            return PassFail.FAIL, reasoning
 
     def _eval_goal_state(self, purpose: str) -> Tuple[float, str]:
         if not purpose.strip() or purpose.strip().lower() in self.EMPTY_EXPRESSIONS:

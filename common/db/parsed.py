@@ -20,7 +20,19 @@ from datetime import datetime
 from typing import Any, Optional
 
 from common import db
+from common.constants import (
+    JIRA_KEY_ATTR_MASTER_ID,
+    LOAD_ERROR_PREFIX,
+    ORACLE_IN_CHUNK_SIZE,
+    ParentType,
+)
 from common.convert import to_raw_dict
+from common.db.schema import (
+    INPUT_COLUMN_BYTES,
+    MANAGER_COLUMN_BYTES,
+    OUTPUT_COLUMN_BYTES,
+    PARSED_COLUMN_BYTES,
+)
 from common.text import truncate, clob_or_none, safe_dict, safe_list
 
 
@@ -96,7 +108,7 @@ def save_parsed(
             for mgr_seq, mgr in enumerate(safe_list(inp.get("managers"))):
                 _insert_manager(
                     cur, parsed_id,
-                    parent_type="INPUT",
+                    parent_type=ParentType.INPUT,
                     parent_id=input_id,
                     seq=mgr_seq,
                     manager=safe_dict(mgr),
@@ -111,7 +123,7 @@ def save_parsed(
             for rcv_seq, rcv in enumerate(safe_list(out.get("receivers"))):
                 _insert_manager(
                     cur, parsed_id,
-                    parent_type="OUTPUT",
+                    parent_type=ParentType.OUTPUT,
                     parent_id=output_id,
                     seq=rcv_seq,
                     manager=safe_dict(rcv),
@@ -218,8 +230,8 @@ def get_existing_hashes(issue_keys: list[str]) -> dict[str, str]:
 
     # Oracle IN절 최대 1000개 제한 → 청크 분할
     result = {}
-    for chunk_start in range(0, len(issue_keys), 500):
-        chunk = issue_keys[chunk_start : chunk_start + 500]
+    for chunk_start in range(0, len(issue_keys), ORACLE_IN_CHUNK_SIZE):
+        chunk = issue_keys[chunk_start : chunk_start + ORACLE_IN_CHUNK_SIZE]
         placeholders = ", ".join(f":k{i}" for i in range(len(chunk)))
         params = {f"k{i}": key for i, key in enumerate(chunk)}
 
@@ -272,40 +284,41 @@ def _insert_parsed(
             run_id,
             task_id,
             raw_json,
-            purpose, 
-            task_execution_method, 
+            purpose,
+            task_execution_method,
             tool,
-            task_manager_role, 
-            task_manager_role_type, 
+            task_manager_role,
+            task_manager_role_type,
             task_manager_job_category,
-            parsed_at, 
+            parsed_at,
             parser_version
         ) VALUES (
-            :run_id, 
-            (SELECT task_id 
-             FROM sillog_tasks_attr 
-             WHERE attr_master_id=17 and attr_value=:issue_key), 
+            :run_id,
+            (SELECT task_id
+             FROM sillog_tasks_attr
+             WHERE attr_master_id=:master_id and attr_value=:issue_key),
             :raw_json,
-            :purpose, 
-            :exec_method, 
+            :purpose,
+            :exec_method,
             :tool,
-            :tm_role, 
-            :tm_role_type, 
+            :tm_role,
+            :tm_role_type,
             :tm_job_cat,
-            :parsed_at, 
+            :parsed_at,
             :parser_ver
         )
         RETURNING parsed_id INTO :out_id
         """,
         run_id=run_id,
+        master_id=JIRA_KEY_ATTR_MASTER_ID,
         issue_key=source_issue_key,
         raw_json=raw_json,
-        purpose=truncate(purpose, 2000),
-        exec_method=truncate(task_execution_method, 4000),
-        tool=truncate(tool, 200),
-        tm_role=truncate(tm_role, 1000),
-        tm_role_type=truncate(tm_role_type, 100),
-        tm_job_cat=truncate(tm_job_category, 100),
+        purpose=truncate(purpose, PARSED_COLUMN_BYTES["purpose"]),
+        exec_method=truncate(task_execution_method, PARSED_COLUMN_BYTES["task_execution_method"]),
+        tool=truncate(tool, PARSED_COLUMN_BYTES["tool"]),
+        tm_role=truncate(tm_role, PARSED_COLUMN_BYTES["task_manager_role"]),
+        tm_role_type=truncate(tm_role_type, PARSED_COLUMN_BYTES["task_manager_role_type"]),
+        tm_job_cat=truncate(tm_job_category, PARSED_COLUMN_BYTES["task_manager_job_category"]),
         parsed_at=datetime.now(),
         parser_ver=parser_version,
         out_id=parsed_id_var,
@@ -341,11 +354,11 @@ def _insert_input(cur, parsed_id: int, seq: int, inp: dict) -> int:
         """,
         pid=parsed_id,
         seq=seq,
-        fname=truncate(inp.get("file_name"), 500),
-        fformat=truncate(inp.get("file_format"), 50),
-        fpath=truncate(inp.get("file_path"), 2000),
+        fname=truncate(inp.get("file_name"), INPUT_COLUMN_BYTES["file_name"]),
+        fformat=truncate(inp.get("file_format"), INPUT_COLUMN_BYTES["file_format"]),
+        fpath=truncate(inp.get("file_path"), INPUT_COLUMN_BYTES["file_path"]),
         descr=clob_or_none(inp.get("description")),
-        tlink=truncate(inp.get("task_link"), 1000),
+        tlink=truncate(inp.get("task_link"), INPUT_COLUMN_BYTES["task_link"]),
         out_id=input_id_var,
     )
     return int(input_id_var.getvalue()[0])
@@ -375,9 +388,9 @@ def _insert_output(cur, parsed_id: int, seq: int, out: dict) -> int:
         """,
         pid=parsed_id,
         seq=seq,
-        fname=truncate(out.get("file_name"), 500),
-        fformat=truncate(out.get("file_format"), 50),
-        fpath=truncate(out.get("file_path"), 2000),
+        fname=truncate(out.get("file_name"), OUTPUT_COLUMN_BYTES["file_name"]),
+        fformat=truncate(out.get("file_format"), OUTPUT_COLUMN_BYTES["file_format"]),
+        fpath=truncate(out.get("file_path"), OUTPUT_COLUMN_BYTES["file_path"]),
         out_id=output_id_var,
     )
     return int(output_id_var.getvalue()[0])
@@ -436,9 +449,9 @@ def _insert_manager(
         ptype=parent_type,
         parent_id=parent_id,
         seq=seq,
-        role=truncate(manager.get("role"), 200),
-        rtype=truncate(manager.get("role_type"), 100),
-        jcat=truncate(manager.get("job_category"), 100),
+        role=truncate(manager.get("role"), MANAGER_COLUMN_BYTES["role"]),
+        rtype=truncate(manager.get("role_type"), MANAGER_COLUMN_BYTES["role_type"]),
+        jcat=truncate(manager.get("job_category"), MANAGER_COLUMN_BYTES["job_category"]),
     )
 
 
@@ -555,7 +568,7 @@ def upload(
         for err in errors_log:
             print(f"  - {err['key']}: {err['error']}")
 
-        error_log_path = parsed_dir / f"_load_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        error_log_path = parsed_dir / f"{LOAD_ERROR_PREFIX}{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         with open(error_log_path, "w", encoding="utf-8") as f:
             json.dump(errors_log, f, ensure_ascii=False, indent=2)
         print(f"\n  에러 로그 저장: {error_log_path}")

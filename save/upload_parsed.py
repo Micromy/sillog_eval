@@ -11,10 +11,8 @@ from datetime import datetime
 from pathlib import Path
 
 from common.config import STORAGE_DIR
+from common.constants import PARSED_SUBDIR
 from common.db.parsed import upload
-
-
-PARSED_SUBDIR = "parsed"
 
 
 def run() -> None:

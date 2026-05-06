@@ -18,6 +18,7 @@
 from typing import List, Optional
 
 from common import db
+from common.constants import ORACLE_IN_CHUNK_SIZE
 
 
 # ── 영향 범위 조회 ──────────────────────────────────
@@ -59,8 +60,8 @@ def count_children(task_eval_ids: List[int]) -> dict:
         }
 
     counts: dict = {}
-    for chunk_start in range(0, len(task_eval_ids), 500):
-        chunk = task_eval_ids[chunk_start: chunk_start + 500]
+    for chunk_start in range(0, len(task_eval_ids), ORACLE_IN_CHUNK_SIZE):
+        chunk = task_eval_ids[chunk_start: chunk_start + ORACLE_IN_CHUNK_SIZE]
         placeholders = ", ".join(f":id{i}" for i in range(len(chunk)))
         params = {f"id{i}": tid for i, tid in enumerate(chunk)}
 

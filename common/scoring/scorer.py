@@ -44,8 +44,8 @@ from .storage import (
     load_previous_results,
 )
 from common.convert import to_raw_dict
+from common.constants import PassFail, RuleType, SCORE_MAP
 from common.config import (
-    SCORE_MAP,
     EVALUATE_PROMPT,
     DEFAULT_MAX_ROUNDS,
     DEFAULT_MAX_RETRIES,
@@ -124,11 +124,11 @@ def evaluate_qualitative_batch(
                     raise ValueError(f"JSON 파싱 실패: {response_text[:200]}")
 
                 result_json = json.loads(json_match.group())
-                pass_fail = result_json.get("pass_fail", "FAIL").upper()
+                pass_fail = result_json.get("pass_fail", PassFail.FAIL).upper()
                 reasoning = result_json.get("reasoning", "")
 
                 if pass_fail not in SCORE_MAP:
-                    pass_fail = "FAIL"
+                    pass_fail = PassFail.FAIL
 
                 return pass_fail, reasoning, attempt, None
 
@@ -138,7 +138,7 @@ def evaluate_qualitative_batch(
                     time.sleep(retry_delay * attempt)
 
         error_info = {"criterion": name, "error": last_error, "attempts": max_retries}
-        return "FAIL", f"[ERROR] {max_retries}회 시도 실패: {last_error}", max_retries, error_info
+        return PassFail.FAIL, f"[ERROR] {max_retries}회 시도 실패: {last_error}", max_retries, error_info
 
     results = []
     error_log = []
@@ -162,7 +162,7 @@ def evaluate_qualitative_batch(
                 retry_note = f" (retry {attempts}회)" if attempts > 1 else ""
                 print(f"    [{completed}/{total}] {name}: {pass_fail}{retry_note}")
             except Exception as e:
-                pass_fail = "FAIL"
+                pass_fail = PassFail.FAIL
                 reasoning = f"[ERROR] future 실패: {e}"
                 error_log.append({"criterion": name, "error": str(e), "attempts": 0})
                 print(f"    [{completed}/{total}] {name}: ERROR")
@@ -258,12 +258,12 @@ def build_summary(
 
     quant_total = len(quant_results)
     qual_total = len(qual_results)
-    quant_pass = sum(1 for r in quant_results if r.pass_fail == "PASS")
-    quant_partial = sum(1 for r in quant_results if r.pass_fail == "PARTIAL")
-    quant_fail = sum(1 for r in quant_results if r.pass_fail == "FAIL")
-    qual_pass = sum(1 for r in qual_results if r.pass_fail == "PASS")
-    qual_partial = sum(1 for r in qual_results if r.pass_fail == "PARTIAL")
-    qual_fail = sum(1 for r in qual_results if r.pass_fail == "FAIL")
+    quant_pass = sum(1 for r in quant_results if r.pass_fail == PassFail.PASS)
+    quant_partial = sum(1 for r in quant_results if r.pass_fail == PassFail.PARTIAL)
+    quant_fail = sum(1 for r in quant_results if r.pass_fail == PassFail.FAIL)
+    qual_pass = sum(1 for r in qual_results if r.pass_fail == PassFail.PASS)
+    qual_partial = sum(1 for r in qual_results if r.pass_fail == PassFail.PARTIAL)
+    qual_fail = sum(1 for r in qual_results if r.pass_fail == PassFail.FAIL)
 
     summary_struct = {
         "final_score": final_score,
@@ -367,7 +367,7 @@ def score_issue(
     quant_results_map = dict(prev_quant_map)
     for r in new_quant_results:
         quant_results_map[r.criterion_name] = r
-        save_item_result(storage_dir, model_name, key, r, "QUANTITATIVE", eval_seq)
+        save_item_result(storage_dir, model_name, key, r, RuleType.QUANTITATIVE, eval_seq)
     quant_results = list(quant_results_map.values())
 
     # 2. 정성 평가 (라운드 루프)
@@ -393,7 +393,7 @@ def score_issue(
                 name: target_qual[name]
                 for name in target_qual_names
                 if name in qual_results_map
-                and (qual_results_map[name].pass_fail != "PASS"
+                and (qual_results_map[name].pass_fail != PassFail.PASS
                      or qual_results_map[name].reasoning.startswith("[ERROR]"))
             }
             if not target_criteria:
@@ -414,7 +414,7 @@ def score_issue(
 
         for r in round_results:
             qual_results_map[r.criterion_name] = r
-            save_item_result(storage_dir, model_name, key, r, "QUALITATIVE", eval_seq)
+            save_item_result(storage_dir, model_name, key, r, RuleType.QUALITATIVE, eval_seq)
 
         current_score = IssueScore(
             key=key,

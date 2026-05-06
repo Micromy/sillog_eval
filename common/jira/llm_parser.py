@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 
 from common.config import STORAGE_DIR, PARSING_TEMPLATE
+from common.constants import PARSED_SUBDIR, PARSE_ERROR_PREFIX
 from common.llm import safe_structured_invoke
 from common.storage import save_json
 from .models import SillogData
@@ -11,7 +12,7 @@ from .models import SillogData
 def parse_issues_parallel(
     issues_by_key: dict[str, dict[str, str]],
     llm_pools: list,
-    output_dir: str = "parsed",
+    output_dir: str = PARSED_SUBDIR,
 ) -> tuple[dict, list[str]]:
     """
     LLM 풀을 활용해 issues_by_key를 병렬로 파싱한다.
@@ -77,7 +78,7 @@ def parse_issues_parallel(
         print(f"  실패 키: {failed_keys}")
 
     if errors:
-        error_log_path = storage_path / f"_parse_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        error_log_path = storage_path / f"{PARSE_ERROR_PREFIX}{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         save_json(error_log_path, errors)
         print(f"  에러 로그 저장: {error_log_path}")
 
