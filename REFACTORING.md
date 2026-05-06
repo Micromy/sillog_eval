@@ -182,11 +182,27 @@ refactor: to_raw_dict를 common/convert.py로 추출
 
 ---
 
-### 4. 코드 품질 ⬜ 예정
+### 4. 코드 품질 🔄 진행 중
 
-- `llm.py`의 `from config import *` wildcard import 제거
-- 타입 힌트 보강 (`jira.py`, `storage.py`, `main.py`)
-- 에러 핸들링 패턴 통일 (`parsing_llm.py`의 silent skip → 에러 수집/리포트)
+#### 4-1. wildcard import 제거 ✅
+
+`from .config import *`이 `llm.py`/`main.py` 두 곳에 있었음. 실제 사용 이름만 명시 import로 교체.
+
+**변경 파일:**
+- `llm.py` — `PLATFORM`, `DTGPT_URL/MODEL/TOKEN`, `DS_LLM_URL/MODEL/HEADER` 명시
+- `main.py` — `PLATFORM`, `DTGPT_MODEL`, `DS_LLM_MODEL`, `FILTER_ID`, `LLM_POOL_SIZE`, `STORAGE_DIR` 명시
+
+```
+refactor: wildcard import 제거 (llm.py, main.py)
+```
+
+#### 4-2. 타입 힌트 보강 ⬜ 예정
+
+`jira.py`, `storage.py`, `main.py` 등에 타입 힌트 추가.
+
+#### 4-3. 에러 핸들링 패턴 통일 ⬜ 예정
+
+`parsing_llm.py`의 silent skip → 에러 수집/리포트로 변경.
 
 ---
 

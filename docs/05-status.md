@@ -19,7 +19,7 @@
 | 3-1. `score_async.py` 저장 함수 → `scorer/storage.py` 이전 | ✅ |
 | 3-2. 패키지화 + entry 함수 `run()` 통일 (`python -m` 실행) | ✅ |
 | 3-3. `to_raw_dict` → `common/convert.py` 추출 (3곳 중복 → 단일 정의) | ✅ |
-| 4-1. `llm.py`의 `from .config import *` wildcard 제거 | ⬜ |
+| 4-1. `llm.py`/`main.py`의 wildcard import 제거 (명시 import) | ✅ |
 | 4-2. 타입 힌트 보강 (`jira.py`, `storage.py`, `main.py`) | ⬜ |
 | 4-3. `parsing_llm.py` 에러 핸들링 (silent skip → 수집/리포트) | ⬜ |
 

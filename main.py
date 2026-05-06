@@ -1,4 +1,11 @@
-from .config import *
+from .config import (
+    PLATFORM,
+    DTGPT_MODEL,
+    DS_LLM_MODEL,
+    FILTER_ID,
+    LLM_POOL_SIZE,
+    STORAGE_DIR,
+)
 from .jira import get_jql_filter, get_sections_by_key
 from .storage import save_pkl, load_pkl
 from .llm import create_llm

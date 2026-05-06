@@ -1,7 +1,15 @@
 import time
 import re
 from langchain_openai import ChatOpenAI
-from .config import *
+from .config import (
+    PLATFORM,
+    DTGPT_URL,
+    DTGPT_MODEL,
+    DTGPT_TOKEN,
+    DS_LLM_URL,
+    DS_LLM_MODEL,
+    DS_LLM_HEADER,
+)
 
 
 def create_llm():
