@@ -7,11 +7,15 @@ from typing import Dict, List, Tuple, Optional
 import re
 
 from common.constants import PassFail
-from ..base import QUANTITATIVE_CHECKLIST, ChecklistResult
+from ..base import ChecklistResult
 
 
 class QuantitativeEvaluator:
-    """정량 평가 - Rule 기반 판단 (구조화된 데이터 기반)"""
+    """정량 평가 - Rule 기반 판단 (구조화된 데이터 기반).
+
+    DB의 `eval_task_rule_item`에서 로드된 (item_name, criteria_text)를 받아
+    `_REGISTRY[item_name]`에 등록된 함수로 평가. registry에 없으면 FAIL 처리.
+    """
 
     GOAL_OBJECTS = ["기능", "정합성", "오류", "검증", "배포", "연동", "수집", "가공", "삭제", "매핑", "테스트"]
     GOAL_ACTIONS = ["구현", "확보", "방지", "수행", "완료", "적용", "반영", "처리"]
@@ -33,8 +37,27 @@ class QuantitativeEvaluator:
 
     def __init__(self, criteria_refinements: Optional[Dict] = None):
         self.criteria_refinements = criteria_refinements or {}
+        # name → (ctx) -> (score: float, reasoning: str)
+        self._registry = {
+            "input_data_name": lambda ctx: self._eval_list_field(ctx["input_data_list"], "file_name", "Input 데이터명"),
+            "input_location":  lambda ctx: self._eval_list_field(ctx["input_data_list"], "file_path", "Input 위치"),
+            "input_provider":  lambda ctx: self._eval_list_managers(ctx["input_data_list"], "managers", "Input 제공자"),
+            "task_owner":      lambda ctx: self._eval_manager_field(ctx["task_manager"], "Task 담당자"),
+            "output_filename": lambda ctx: self._eval_list_field(ctx["outputs_list"], "file_name", "산출물 파일명"),
+            "output_location": lambda ctx: self._eval_list_field(ctx["outputs_list"], "file_path", "산출물 위치"),
+            "output_receiver": lambda ctx: self._eval_list_managers(ctx["outputs_list"], "receivers", "산출물 수신자"),
+        }
 
-    def evaluate(self, data: Dict) -> list[ChecklistResult]:
+    def evaluate(self, rule_items: Dict[str, str], data: Dict) -> list[ChecklistResult]:
+        """DB에서 로드된 정량 rule items에 대해 평가.
+
+        Args:
+            rule_items: {item_name: criteria_text} (DB의 eval_method='rule' 항목)
+            data: SillogData를 dict화한 raw 데이터
+
+        Returns:
+            ChecklistResult 리스트. registry에 함수가 없는 name은 FAIL로 기록.
+        """
         description = data.get("description", {})
         input_data_list = description.get("input_data", [])
         outputs_list = data.get("outputs", [])
@@ -49,40 +72,33 @@ class QuantitativeEvaluator:
         }
 
         results = []
-        for criterion_name, question in QUANTITATIVE_CHECKLIST.items():
-            pass_fail, reasoning = self._evaluate_criterion(criterion_name, context)
+        for name, criteria_text in rule_items.items():
+            fn = self._registry.get(name)
+            if fn is None:
+                results.append(ChecklistResult(
+                    criterion_name=name,
+                    question=criteria_text,
+                    pass_fail=PassFail.FAIL,
+                    reasoning=f"평가 함수 미구현: {name}",
+                ))
+                continue
+            score, reasoning = fn(context)
             results.append(ChecklistResult(
-                criterion_name=criterion_name,
-                question=question,
-                pass_fail=pass_fail,
+                criterion_name=name,
+                question=criteria_text,
+                pass_fail=self._score_to_pass_fail(score),
                 reasoning=reasoning,
             ))
 
         return results
 
-    def _evaluate_criterion(self, criterion_name: str, ctx: Dict) -> Tuple[str, str]:
-        evaluators = {
-            "input_data_name": lambda: self._eval_list_field(ctx["input_data_list"], "file_name", "Input 데이터명"),
-            "input_location": lambda: self._eval_list_field(ctx["input_data_list"], "file_path", "Input 위치"),
-            "input_provider": lambda: self._eval_list_managers(ctx["input_data_list"], "managers", "Input 제공자"),
-            "task_owner": lambda: self._eval_manager_field(ctx["task_manager"], "Task 담당자"),
-            "output_filename": lambda: self._eval_list_field(ctx["outputs_list"], "file_name", "산출물 파일명"),
-            "output_location": lambda: self._eval_list_field(ctx["outputs_list"], "file_path", "산출물 위치"),
-            "output_receiver": lambda: self._eval_list_managers(ctx["outputs_list"], "receivers", "산출물 수신자"),
-        }
-
-        evaluator = evaluators.get(criterion_name)
-        if not evaluator:
-            return PassFail.FAIL, "알 수 없는 기준입니다."
-
-        score, reasoning = evaluator()
-
+    @staticmethod
+    def _score_to_pass_fail(score: float) -> str:
         if score >= 0.8:
-            return PassFail.PASS, reasoning
-        elif score >= 0.4:
-            return PassFail.PARTIAL, reasoning
-        else:
-            return PassFail.FAIL, reasoning
+            return PassFail.PASS
+        if score >= 0.4:
+            return PassFail.PARTIAL
+        return PassFail.FAIL
 
     def _eval_goal_state(self, purpose: str) -> Tuple[float, str]:
         if not purpose.strip() or purpose.strip().lower() in self.EMPTY_EXPRESSIONS:

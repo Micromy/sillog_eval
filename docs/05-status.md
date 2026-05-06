@@ -26,6 +26,7 @@
 | **R-1. task-dispatch 구조로 재편성** | ✅ (2026-05-06) |
 | **R-2. task entry / common 인터페이스 분리** | ✅ (2026-05-06) |
 | **R-3. 하드코딩 상수 중앙화 (constants.py + db/schema.py)** | ✅ (2026-05-06) |
+| **R-4. rule item DB SOT 통합 + Quantitative registry 패턴** | ✅ (2026-05-06) |
 
 ### R-1: 디렉토리 재편성
 

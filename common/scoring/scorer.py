@@ -33,7 +33,7 @@ from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_core.runnables import RunnableConfig
 
-from .base import ChecklistResult, IssueScore, QUANTITATIVE_CHECKLIST, QUALITATIVE_CHECKLIST
+from .base import ChecklistResult, IssueScore
 from .evaluators.quantitative import QuantitativeEvaluator
 from .extractor import SillogDataExtractor
 from .agents import CriteriaRefiner, SupervisorAgent
@@ -44,7 +44,8 @@ from .storage import (
     load_previous_results,
 )
 from common.convert import to_raw_dict
-from common.constants import PassFail, RuleType, SCORE_MAP
+from common.constants import EvalMethod, PassFail, RuleType, SCORE_MAP
+from common.db.rules import load_rule_items
 from common.config import (
     EVALUATE_PROMPT,
     DEFAULT_MAX_ROUNDS,
@@ -75,19 +76,22 @@ def calc_weighted_score(quant_results, qual_results):
 def evaluate_qualitative_batch(
     extracted_data,
     llm_pool,
-    target_criteria=None,
+    target_criteria: Dict[str, str],
     max_workers=DEFAULT_MAX_QUAL_WORKERS,
     max_retries=DEFAULT_MAX_RETRIES,
     retry_delay=DEFAULT_RETRY_DELAY,
     criteria_refinements=None,
     progress_callback=None,
 ):
-    """여러 정성 항목 병렬 평가
+    """여러 정성 항목 병렬 평가.
+
+    Args:
+        target_criteria: {item_name: criteria_text} (DB의 eval_method='llm' 항목)
 
     Returns:
         (results: List[ChecklistResult], error_log: List[Dict])
     """
-    criteria = target_criteria or QUALITATIVE_CHECKLIST
+    criteria = target_criteria
     refinements = criteria_refinements or {}
     total = len(criteria)
 
@@ -341,8 +345,8 @@ def score_issue(
     """단일 Issue 평가 (디버깅/단건 처리용 외부 노출)"""
     start_time = time.time()
 
-    target_quant = quantitative_checklist if quantitative_checklist is not None else QUANTITATIVE_CHECKLIST
-    target_qual = qualitative_checklist if qualitative_checklist is not None else QUALITATIVE_CHECKLIST
+    target_quant = quantitative_checklist if quantitative_checklist is not None else load_rule_items(EvalMethod.RULE)
+    target_qual = qualitative_checklist if qualitative_checklist is not None else load_rule_items(EvalMethod.LLM)
 
     prev_meta, prev_quant_map, prev_qual_map = load_previous_results(storage_dir, model_name, key)
     is_reevaluation = prev_meta is not None
@@ -359,9 +363,7 @@ def score_issue(
 
     # 1. 정량 평가
     print(f"  [정량 평가]...", end="")
-    all_quant_results = QuantitativeEvaluator().evaluate(raw_data)
-    target_quant_names = set(target_quant.keys())
-    new_quant_results = [r for r in all_quant_results if r.criterion_name in target_quant_names]
+    new_quant_results = QuantitativeEvaluator().evaluate(target_quant, raw_data)
     print(f" ✓ ({len(new_quant_results)}개 평가)")
 
     quant_results_map = dict(prev_quant_map)

@@ -15,9 +15,30 @@ class PassFail:
 
 
 class RuleType:
-    """평가 규칙 종류 (eval_task_result_item.rule_type / 로컬 _meta items)."""
+    """로컬 `_meta.json` items의 rule_type 필드 값.
+
+    DB의 `eval_method`와는 별개 — 호환성을 위해 로컬 저장은 이 형식을 유지하고
+    DB 경계에서 `EVAL_METHOD_TO_RULE_TYPE`으로 변환한다.
+    """
     QUANTITATIVE = "QUANTITATIVE"
     QUALITATIVE = "QUALITATIVE"
+
+
+class EvalMethod:
+    """`eval_task_rule_item.eval_method` 컬럼 값.
+
+    - `RULE`: 룰 기반 정량 평가 (LLM 무사용, 함수 registry로 매칭)
+    - `LLM`: LLM 기반 정성 평가
+    """
+    RULE = "rule"
+    LLM = "llm"
+
+
+EVAL_METHOD_TO_RULE_TYPE = {
+    EvalMethod.RULE: RuleType.QUANTITATIVE,
+    EvalMethod.LLM: RuleType.QUALITATIVE,
+}
+"""DB의 eval_method → 로컬 rule_type 변환."""
 
 
 class ParentType:

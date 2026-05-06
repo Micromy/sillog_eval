@@ -63,9 +63,14 @@ class IssueScore:
     elapsed_time: float                           # 초
 ```
 
-체크리스트 상수:
-- `QUANTITATIVE_CHECKLIST`: 7개 (input_data_name, input_location, input_provider, task_owner, output_filename, output_location, output_receiver)
-- `QUALITATIVE_CHECKLIST`: 5개 (goal_state_included, completion_pass_fail, completion_criteria_clear, output_validation, completion_source)
+**체크리스트 SOT**: DB의 `eval_task_rule_item` 테이블 (avail='Y' 항목).
+- `eval_method = 'rule'` → 정량 (repo의 `QuantitativeEvaluator._registry`에 함수가 매칭되는 항목만 평가, 미매칭은 FAIL)
+- `eval_method = 'llm'` → 정성 (LLM이 `criteria_text`를 받아 평가)
+
+평가 task 시작 시 `common.db.rules.load_rule_items(eval_method)`로 `{item_name: criteria_text}` 로드.
+
+repo 정량 registry에 등록된 함수 키 (현재 7개):
+- `input_data_name`, `input_location`, `input_provider`, `task_owner`, `output_filename`, `output_location`, `output_receiver`
 
 ## 파일 저장 구조 (평가 결과)
 

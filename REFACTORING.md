@@ -309,6 +309,41 @@ refactor: 하드코딩 값을 common/constants.py + common/db/schema.py로 중�
 
 ---
 
+### R-4. rule item DB SOT 통합 ✅
+
+`QUANTITATIVE_CHECKLIST`/`QUALITATIVE_CHECKLIST` 하드코딩 dict 제거. `eval_task_rule_item` 테이블이 평가 항목의 SOT.
+
+**DB 컬럼 매핑:**
+- `item_name` — repo의 evaluator registry key (정량) / 평가 ID
+- `criteria_text` — 평가 질문 텍스트 (LLM 프롬프트, ChecklistResult.question)
+- `eval_method` — `'rule'`(정량) 또는 `'llm'`(정성)
+- `avail = 'Y'` 만 활성
+
+**신규/변경:**
+- `common/constants.py`: `EvalMethod.RULE` / `EvalMethod.LLM` 상수, `EVAL_METHOD_TO_RULE_TYPE` 매핑 추가 (DB 경계에서 변환)
+- `common/db/rules.py` (NEW):
+  - `load_rule_items(eval_method)` — `{item_name: criteria_text}` 반환
+  - `load_rule_item_id_map()` — `{item_name: eval_rule_item_id}` (upload용, 기존 `load_active_rule_items`에서 이전)
+- `common/scoring/evaluators/quantitative.py`:
+  - 7개 lambda를 `self._registry: dict[name, fn(ctx)]`로 캡슐화
+  - `evaluate(rule_items, data)` 시그니처 — DB 로드된 dict 받아 iterate, registry 미등록 name은 FAIL 기록
+- `common/scoring/scorer.py`:
+  - `score_issue`가 `quantitative_checklist`/`qualitative_checklist` 인자 미제공 시 DB에서 자동 로드
+  - 정성 batch 함수의 `target_criteria` 인자 필수화
+- `common/scoring/base.py`: 하드코딩 `QUANTITATIVE_CHECKLIST`/`QUALITATIVE_CHECKLIST` 삭제
+- `common/scoring/__init__.py`: 두 dict re-export 제거
+- `common/db/result.py`: `load_active_rule_items` → `common.db.rules.load_rule_item_id_map`으로 이전, 호출부도 갱신
+
+**의존성 추가:**
+- 평가 task(`score score_issues`) 실행에 DB 연결 필수 (env: `ORACLE_USER`/`ORACLE_PASSWORD`/`ORACLE_DSN`)
+- DB에 새 정량 룰을 추가할 때는 repo의 `QuantitativeEvaluator._registry`에 함수도 함께 추가해야 함
+
+```
+refactor: rule item을 DB(eval_task_rule_item) SOT로 통합 + 정량 evaluator를 registry 패턴으로
+```
+
+---
+
 ## 정리 규칙
 
 - 코드 변경 시 커밋 메시지 함께 기록

@@ -33,32 +33,9 @@ from common.constants import (
     SupervisorStatus,
     YN,
 )
+from common.db.rules import load_rule_item_id_map
 from common.db.schema import RESULT_COLUMN_BYTES
 from common.text import truncate
-
-
-# ── rule_item 매핑 로드 ─────────────────────────────
-
-def load_active_rule_items() -> Tuple[Dict[str, int], int]:
-    """활성 rule_item 매핑 로드.
-
-    Returns:
-        (mapping: {item_name: eval_rule_item_id}, latest_rule_set_id: int)
-    """
-    rows = db.select(
-        """
-        SELECT eval_rule_item_id, eval_rule_set_id, item_name
-        FROM eval_task_rule_item
-        WHERE avail = 'Y'
-        """,
-    )
-    if not rows:
-        raise RuntimeError("활성 rule_item이 없음")
-
-    mapping = {row["item_name"]: row["eval_rule_item_id"] for row in rows}
-    latest_rule_set_id = max(row["eval_rule_set_id"] for row in rows)
-
-    return mapping, latest_rule_set_id
 
 
 # ── task_id 조회 ──────────────────────────────────
@@ -385,7 +362,7 @@ def migrate(
         print(f"[error] 디렉토리 없음: {final_dir}")
         sys.exit(1)
 
-    rule_item_map, eval_rule_set_id = load_active_rule_items()
+    rule_item_map, eval_rule_set_id = load_rule_item_id_map()
     print(f"[시작] model={model_name} | rule_set_id={eval_rule_set_id} | "
           f"활성 rule_items={len(rule_item_map)}개")
 
