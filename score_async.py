@@ -49,6 +49,7 @@ from .scorer.storage import (
     save_iteration,
     load_previous_results,
 )
+from .common.convert import to_raw_dict
 from .config import (
     SCORE_MAP,
     EVALUATE_PROMPT,
@@ -62,19 +63,6 @@ from .config import (
     QUAL_BATCH_FUTURE_TIMEOUT,
     ISSUE_TIMEOUT,
 )
-
-
-# ── 데이터 변환 헬퍼 ────────────────────────────────
-
-def to_raw_dict(sillog_data):
-    """SillogData를 정량 평가용 raw dict로 변환"""
-    if isinstance(sillog_data, dict):
-        return sillog_data
-    if hasattr(sillog_data, "model_dump"):
-        return sillog_data.model_dump()
-    if hasattr(sillog_data, "dict"):
-        return sillog_data.dict()
-    raise TypeError(f"sillog_data를 dict로 변환할 수 없음: {type(sillog_data)}")
 
 
 # ── 점수 계산 ──────────────────────────────────────

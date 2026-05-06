@@ -161,9 +161,24 @@ refactor: 평가 결과 저장 헬퍼를 scorer/storage.py로 분리
 refactor: 패키지화 + entry 함수 run() 통일 (python -m 실행 지원)
 ```
 
-#### 3-3. common/ 추가 확장
+#### 3-3. common/ 추가 확장 ✅
 
-`to_raw_dict` 등 여러 모듈에서 쓰이는 변환 함수를 `common/convert.py`로 추출 검토.
+`to_raw_dict`(SillogData Pydantic | dict → dict)이 3곳에 중복되어 있던 것을 `common/convert.py`로 추출.
+
+**이전 중복 위치:**
+- `score_async.py:69-77` — `def to_raw_dict()` (canonical)
+- `scorer/extractor.py` — `extract()` 입구 inline
+- `parser/persistence.py` — `save_parsed()` 입구 inline (필드 검증 분기 순서가 약간 달랐음)
+
+**변경 파일:**
+- `common/convert.py` — 신규 (단일 정의)
+- `score_async.py` — local def 삭제, `from .common.convert import to_raw_dict`
+- `scorer/extractor.py` — inline 분기 삭제, `from ..common.convert import to_raw_dict` 후 한 줄로
+- `parser/persistence.py` — inline 분기 삭제, 같은 import + 한 줄
+
+```
+refactor: to_raw_dict를 common/convert.py로 추출
+```
 
 ---
 

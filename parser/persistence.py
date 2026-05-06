@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from ..common import db
+from ..common.convert import to_raw_dict
 from ..common.text import truncate, clob_or_none, safe_dict, safe_list
 
 
@@ -62,16 +63,7 @@ def save_parsed(
     if not parser_version:
         raise ValueError("parser_version이 비어있음")
 
-    # Pydantic → dict 변환
-    if hasattr(sillog_data, "model_dump"):
-        data = sillog_data.model_dump()
-    elif hasattr(sillog_data, "dict"):
-        data = sillog_data.dict()
-    elif isinstance(sillog_data, dict):
-        data = sillog_data
-    else:
-        raise TypeError(f"sillog_data 타입 불일치: {type(sillog_data)}")
-
+    data = to_raw_dict(sillog_data)
     raw_json = json.dumps(data, ensure_ascii=False, indent=2)
     desc = safe_dict(data.get("description"))
 

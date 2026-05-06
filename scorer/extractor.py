@@ -4,6 +4,8 @@ SillogData Extractor - Extract relevant information from SillogData structure
 """
 from typing import Dict, Any
 
+from ..common.convert import to_raw_dict
+
 
 class SillogDataExtractor:
     """
@@ -12,15 +14,7 @@ class SillogDataExtractor:
 
     @staticmethod
     def extract(sillog_data) -> Dict[str, Any]:
-        # 입구에서 dict로 통일 (Pydantic이면 model_dump/dict로 변환)
-        if isinstance(sillog_data, dict):
-            data = sillog_data
-        elif hasattr(sillog_data, "model_dump"):
-            data = sillog_data.model_dump()
-        elif hasattr(sillog_data, "dict"):
-            data = sillog_data.dict()
-        else:
-            raise TypeError(f"sillog_data 타입 불일치: {type(sillog_data)}")
+        data = to_raw_dict(sillog_data)
 
         description = data.get("description", {})
         outputs = data.get("outputs", [])
