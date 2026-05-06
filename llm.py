@@ -1,7 +1,7 @@
 import time
 import re
 from langchain_openai import ChatOpenAI
-from config import *
+from .config import *
 
 
 def create_llm():

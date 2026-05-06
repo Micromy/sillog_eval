@@ -32,7 +32,7 @@ import argparse
 import sys
 from typing import List, Optional
 
-from common import db
+from .common import db
 
 
 # ── 영향 범위 조회 ──────────────────────────────────
@@ -165,7 +165,7 @@ def delete_targets(task_eval_ids: List[int]) -> dict:
 
 # ── 메인 ──────────────────────────────────────────
 
-def run(
+def reset(
     eval_rule_set_id: int,
     model_name: Optional[str],
     created_by: Optional[str],
@@ -235,7 +235,7 @@ def run(
 
 # ── CLI ──────────────────────────────────────────
 
-if __name__ == "__main__":
+def run():
     parser = argparse.ArgumentParser(
         description="평가 결과 테이블 리셋 스크립트 (자식 4 → 부모 1 순)",
     )
@@ -257,9 +257,13 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    run(
+    reset(
         eval_rule_set_id=args.rule_set_id,
         model_name=args.model_name,
         created_by=args.created_by,
         execute=args.execute,
     )
+
+
+if __name__ == "__main__":
+    run()

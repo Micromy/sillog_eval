@@ -4,10 +4,9 @@
 
 ## 코드 베이스 상태
 
-- 형태: **standalone Python 모듈** (Airflow 의존 제거)
+- 형태: **standalone Python 패키지** (`python -m sillog_eval.<module>`로 실행, Airflow 안팎 모두 가능)
 - 이전 형태(Airflow DAG)는 원격 `https://github.com/Micromy/sillog_eval`에 보존
 - 현 로컬 git: `~/Projects/sillog_eval` (2026-05-06 재초기화, 원격 미연동)
-- 25개 파일, 약 3,745 LOC
 
 ## 리팩토링 진행
 
@@ -16,11 +15,11 @@
 | 1-1. `db.fetch_one`/`fetch_all` → `db.fetch`/`db.select` 호출부 정리 | ✅ |
 | 1-2. `task_excution_method` → `task_execution_method` 오타 정정 | ✅ |
 | 2-1. 문자열 유틸 → `common/text.py` 추출 (`truncate`, `clob_or_none`, `safe_dict`, `safe_list`) | ✅ |
-| 2-2. `extractor.py` dict/Pydantic 중복 제거 (`to_raw_dict` 단일 경로) | ⬜ |
-| 3-1. `score_async.py` 저장 함수 → `scorer/storage.py` 이전 + 루트 `storage.py` 역할 정리 | ⬜ |
-| 3-2. `main.py` 함수화 (`def main()` + `if __name__ == "__main__"`) | ⬜ |
+| 2-2. `extractor.py` dict/Pydantic 중복 제거 | ✅ |
+| 3-1. `score_async.py` 저장 함수 → `scorer/storage.py` 이전 | ✅ |
+| 3-2. 패키지화 + entry 함수 `run()` 통일 (`python -m` 실행) | ✅ |
 | 3-3. `common/convert.py`(`to_raw_dict` 등) 추출 검토 | ⬜ |
-| 4-1. `llm.py`의 `from config import *` 제거 | ⬜ |
+| 4-1. `llm.py`의 `from .config import *` wildcard 제거 | ⬜ |
 | 4-2. 타입 힌트 보강 (`jira.py`, `storage.py`, `main.py`) | ⬜ |
 | 4-3. `parsing_llm.py` 에러 핸들링 (silent skip → 수집/리포트) | ⬜ |
 
@@ -34,7 +33,8 @@
 
 ## 다음 작업 추천
 
-1. `.env` 템플릿 작성 + README의 셋업 절 추가 (커밋용은 변수명만)
-2. `extractor.py` 중복 제거 (REFACTORING 2-2) — 가장 짧고 효과 큰 작업
-3. `main.py` 함수화 + CLI 인자 (filter_id override 등) 도입
-4. 통합 동작 테스트 (소량 이슈 1~2건으로 main 흐름 + DB 적재 라운드트립)
+1. `.env` 템플릿(`.env.example`) 작성 + README 셋업 절 추가 (커밋용은 변수명만)
+2. 4-1: `llm.py`의 wildcard import (`from .config import *`) 명시 import로 변경
+3. 3-3: `to_raw_dict` 등 변환 헬퍼 → `common/convert.py` 추출
+4. 4-2/4-3: 타입 힌트 + 에러 핸들링 보강
+5. 통합 동작 테스트 (소량 이슈 1~2건으로 `python -m sillog_eval.main` 라운드트립)

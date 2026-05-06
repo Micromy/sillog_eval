@@ -16,9 +16,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from common import db
-from config import STORAGE_DIR
-from parser.persistence import save_parsed
+from .common import db
+from .config import STORAGE_DIR
+from .parser.persistence import save_parsed
 
 
 PARSED_SUBDIR = "parsed"
@@ -71,7 +71,7 @@ def validate_sillog_structure(data: dict, key: str) -> list[str]:
     return errors
 
 
-def run(
+def upload(
     parsed_dir: Path,
     run_id: str,
     parser_version: str,
@@ -153,7 +153,7 @@ def run(
     return success, skipped, failed
 
 
-def main():
+def run():
     default_parsed_dir = str(Path(STORAGE_DIR) / PARSED_SUBDIR)
 
     parser = argparse.ArgumentParser(
@@ -185,7 +185,7 @@ def main():
     parsed_dir = Path(args.parsed_dir)
 
     print(f"[경로] {parsed_dir}")
-    run(
+    upload(
         parsed_dir=parsed_dir,
         run_id=args.run_id,
         parser_version=args.parser_version,
@@ -194,4 +194,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run()

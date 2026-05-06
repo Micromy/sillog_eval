@@ -33,7 +33,7 @@ from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_core.runnables import RunnableConfig
 
-from scorer import (
+from .scorer import (
     ChecklistResult,
     IssueScore,
     QuantitativeEvaluator,
@@ -43,13 +43,13 @@ from scorer import (
     CriteriaRefiner,
     SupervisorAgent,
 )
-from scorer.storage import (
+from .scorer.storage import (
     save_item_result,
     save_meta,
     save_iteration,
     load_previous_results,
 )
-from config import (
+from .config import (
     SCORE_MAP,
     EVALUATE_PROMPT,
     DEFAULT_MAX_ROUNDS,

@@ -133,9 +133,33 @@ refactor: extractor.py dict/Pydantic 분기 통합
 refactor: 평가 결과 저장 헬퍼를 scorer/storage.py로 분리
 ```
 
-#### 3-2. main.py 함수화
+#### 3-2. 패키지화 + entry 통일 ✅
 
-스크립트 레벨 코드를 `def main()` + `if __name__ == "__main__"` 패턴으로 감싸기.
+스크립트 레벨 코드를 함수로 감싸는 작업과 함께, 패키지 내부 import를 모두 상대 import로 전환하여 `python -m sillog_eval.<module>` 식으로 실행 가능하게 함. 이전 Airflow 체계와의 일관성을 위해 entry 함수명은 무인자 `run()`으로 통일.
+
+**변경 내용:**
+- 모든 패키지 내부 import → 상대 import (`from .config`, `from ..common.db` 등)
+- 5개 entry 스크립트의 entry 함수를 무인자 `def run()`으로 통일:
+  - `main.py`: `def run()` (스크립트 레벨 코드 감쌈)
+  - `upload_parsed.py`: 기존 `run(...)` → `upload(...)`, 기존 `main()` → `run()`
+  - `migrate_eval_results.py`: 기존 `run(...)` → `migrate(...)`, CLI 블록을 `def run()`으로 감쌈
+  - `migrate_meta.py`: `def main()` → `def run()`
+  - `reset_eval_results.py`: 기존 `run(...)` → `reset(...)`, CLI 블록을 `def run()`으로 감쌈
+- 모든 entry 스크립트 끝에 `if __name__ == "__main__": run()`
+
+**변경 파일 (10개):**
+- `main.py`, `llm.py`, `parsing_llm.py`, `score_async.py` — import 상대화 + entry
+- `upload_parsed.py`, `migrate_eval_results.py`, `migrate_meta.py`, `reset_eval_results.py` — import 상대화 + entry rename
+- `parser/persistence.py` — `from common` → `from ..common`
+- `scorer/agents.py` — `from config` → `from ..config`
+
+**실행 방법:**
+- 패키지로: `cd ~/Projects && python -m sillog_eval.main`, `python -m sillog_eval.upload_parsed --help` 등
+- Airflow에서: BashOperator로 `python -m sillog_eval.<module>` 호출 (env 변수로 .env 대체)
+
+```
+refactor: 패키지화 + entry 함수 run() 통일 (python -m 실행 지원)
+```
 
 #### 3-3. common/ 추가 확장
 

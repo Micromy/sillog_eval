@@ -25,9 +25,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from common import db
-from common.text import truncate
-from config import STORAGE_DIR
+from .common import db
+from .common.text import truncate
+from .config import STORAGE_DIR
 
 
 # ── rule_item 매핑 로드 ─────────────────────────────
@@ -366,7 +366,7 @@ def migrate_one(
 
 # ── 메인 ──────────────────────────────────────────
 
-def run(
+def migrate(
     storage_dir: Path,
     model_name: str,
     keys: Optional[List[str]] = None,
@@ -463,7 +463,7 @@ def _grade_from_status(status: Optional[str]) -> Optional[str]:
 
 # ── CLI ──────────────────────────────────────────
 
-if __name__ == "__main__":
+def run():
     parser = argparse.ArgumentParser(description="평가 결과 DB 마이그레이션")
     parser.add_argument(
         "model_name",
@@ -495,8 +495,12 @@ if __name__ == "__main__":
             file_keys = [line.strip() for line in f if line.strip() and not line.startswith("#")]
         keys.extend(file_keys)
 
-    run(
+    migrate(
         storage_dir=Path(args.storage_dir),
         model_name=args.model_name,
         keys=keys if keys else None,
     )
+
+
+if __name__ == "__main__":
+    run()

@@ -275,7 +275,7 @@ def find_meta_files(storage_dir: Path, model_filter: Optional[str] = None):
                 yield meta_path
 
 
-def main():
+def run():
     parser = argparse.ArgumentParser(description="_meta.json 마이그레이션")
     parser.add_argument("storage_dir", help="저장 루트 디렉토리 (예: eval_results)")
     parser.add_argument("--model", help="특정 모델만 처리", default=None)
@@ -306,4 +306,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run()

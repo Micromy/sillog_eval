@@ -19,8 +19,8 @@ import json
 from datetime import datetime
 from typing import Any, Optional
 
-from common import db
-from common.text import truncate, clob_or_none, safe_dict, safe_list
+from ..common import db
+from ..common.text import truncate, clob_or_none, safe_dict, safe_list
 
 
 # ── 단일 이슈 적재 ──────────────────────────────────────────────
