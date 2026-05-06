@@ -11,23 +11,25 @@
 
 ```
 sillog_eval/                       # repo root, NOT a Python package
-├── run_task.py                    # CLI dispatcher (python run_task.py <dag> <task_id>)
-├── REFACTORING.md
-├── README.md / docs/ / .gitignore
+├── run_task.py                    # CLI dispatcher
+├── REFACTORING.md / README.md / docs/ / .gitignore
 │
-├── common/                        # 공유 헬퍼 (config/db/llm/storage/text/convert)
-├── parse/                         # 파싱 도메인
-│   ├── fetch_jira.py             ← task
-│   ├── parse_description.py      ← task
-│   └── jira/llm_parser/models/persistence (헬퍼)
-├── score/                         # 평가 도메인
-│   ├── score_issues.py           ← task
-│   └── scorer/base/extractor/agents/storage/evaluators (헬퍼)
-└── save/                          # DB저장 도메인
-    ├── upload_parsed.py          ← task
-    ├── upload_results.py         ← task
-    ├── migrate_meta.py           ← task
-    └── reset_results.py          ← task
+├── common/                        # 모든 헬퍼·인터페이스
+│   ├── config / llm / storage / text / convert (top-level)
+│   ├── db/                        # cursor, parsed, result, reset, meta
+│   ├── jira/                      # client, models, llm_parser
+│   └── scoring/                   # base, extractor, agents, scorer, storage, evaluators/
+│
+├── parse/                         # task entry only
+│   ├── fetch_jira.py
+│   └── parse_description.py
+├── score/                         # task entry only
+│   └── score_issues.py
+└── save/                          # task entry only
+    ├── upload_parsed.py
+    ├── upload_results.py
+    ├── migrate_meta.py
+    └── reset_results.py
 ```
 
 ---
@@ -243,6 +245,38 @@ refactor: parsing_llm.py 에러 수집/리포트 패턴 적용
 
 ```
 refactor: task-dispatch 구조로 재편성 (run_task.py + 3개 도메인)
+```
+
+---
+
+### R-2. task entry / common 인터페이스 분리 ✅
+
+`{dag}/{task_id}.py`에는 task 진입(argparse + 헬퍼 호출)만 두고, 비즈니스 로직은 모두 `common/` 안의 sub-package로 이전. 도메인 디렉토리는 thin wrapper로 환원.
+
+**`common/` 재구성:**
+- `common/db/` 패키지화 (기존 `common/db.py` → `common/db/cursor.py`로 승격, `__init__.py`에서 re-export)
+- `common/jira/` 신규: `client.py`(JIRA REST), `models.py`(SillogData), `llm_parser.py`(병렬 파싱)
+- `common/scoring/` 신규: `base/extractor/agents/scorer/storage` + `evaluators/`
+- `common/db/parsed.py` — SillogData → DB 적재 + 일괄 `upload()` 함수
+- `common/db/result.py` — IssueScore → DB 마이그레이션 (8개 헬퍼 + `migrate()`)
+- `common/db/reset.py` — eval_task_result* 삭제 헬퍼 + `reset()`
+- `common/db/meta.py` — `_meta.json` 백필 + `migrate_all()`
+
+**`save/` 슬림화:**
+| 파일 | 이전 | 이후 |
+|------|------|------|
+| `save/upload_parsed.py` | 200줄 | 45줄 |
+| `save/upload_results.py` | 500줄 | 40줄 |
+| `save/migrate_meta.py` | 310줄 | 28줄 |
+| `save/reset_results.py` | 270줄 | 32줄 |
+
+**`parse/`, `score/` 슬림화:**
+- `parse/jira.py`, `parse/models.py`, `parse/llm_parser.py`, `parse/persistence.py` → `common/jira/`, `common/db/parsed.py`로 이전
+- `score/base.py`, `score/extractor.py`, `score/agents.py`, `score/scorer.py`, `score/storage.py`, `score/evaluators/` → `common/scoring/`으로 이전
+- 각 도메인 디렉토리에는 task entry만 남음
+
+```
+refactor: task entry / common 인터페이스 분리 (헬퍼 모두 common/으로)
 ```
 
 ---

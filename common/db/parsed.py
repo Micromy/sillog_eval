@@ -440,3 +440,124 @@ def _insert_manager(
         rtype=truncate(manager.get("role_type"), 100),
         jcat=truncate(manager.get("job_category"), 100),
     )
+
+
+# ── 일괄 업로드 (디렉토리 → DB) ────────────────────────────────
+
+def _discover_files(parsed_dir):
+    """디렉터리에서 {key}.json 파일 목록 수집 (에러 로그 제외)."""
+    import sys
+
+    if not parsed_dir.exists():
+        print(f"[ERROR] 디렉터리 없음: {parsed_dir}")
+        sys.exit(1)
+
+    all_files = sorted(parsed_dir.glob("*.json"))
+    files = [f for f in all_files if not f.name.startswith("_")]
+    if not files:
+        print(f"[WARN] JSON 파일 없음: {parsed_dir}")
+        sys.exit(0)
+    return files, len(all_files) - len(files)
+
+
+def _validate_sillog_structure(data: dict) -> list[str]:
+    """최소 구조 검증. 에러 메시지 리스트 (빈 리스트 = 정상)."""
+    errors = []
+    if "description" not in data:
+        errors.append("description 필드 없음")
+    else:
+        desc = data["description"]
+        if "purpose" not in desc:
+            errors.append("description.purpose 필드 없음")
+        if "input_data" not in desc:
+            errors.append("description.input_data 필드 없음")
+    if "checklist" not in data:
+        errors.append("checklist 필드 없음")
+    if "outputs" not in data:
+        errors.append("outputs 필드 없음")
+    return errors
+
+
+def upload(
+    parsed_dir,
+    run_id: str,
+    parser_version: str,
+    dry_run: bool = False,
+) -> tuple[int, int, int]:
+    """parsed/*.json 일괄 적재.
+
+    UK 위반은 skip, 그 외 실패는 _load_errors_<ts>.json에 누적 저장.
+
+    Returns: (success, skipped, failed)
+    """
+    files, excluded = _discover_files(parsed_dir)
+
+    print(f"[시작] {len(files)}개 파일 발견 | run_id={run_id} | parser_version={parser_version}")
+    if excluded:
+        print(f"  (에러 로그 등 {excluded}개 제외)")
+    if dry_run:
+        print("[DRY-RUN] DB 적재 없이 검증만 수행합니다.\n")
+
+    success = 0
+    skipped = 0
+    failed = 0
+    errors_log: list[dict] = []
+
+    for i, filepath in enumerate(files, 1):
+        key = filepath.stem
+        prefix = f"  [{i}/{len(files)}] {key}"
+
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            print(f"{prefix}: JSON 파싱 실패 - {e}")
+            errors_log.append({"key": key, "error": f"JSON 파싱 실패: {e}"})
+            failed += 1
+            continue
+
+        validation_errors = _validate_sillog_structure(data)
+        warning_msg = f" [구조 부족: {'; '.join(validation_errors)}]" if validation_errors else ""
+
+        if dry_run:
+            desc = data.get("description", {}) or {}
+            input_count = len(desc.get("input_data") or [])
+            output_count = len(data.get("outputs") or [])
+            check_count = len(data.get("checklist") or [])
+            print(f"{prefix}: OK (input={input_count}, output={output_count}, check={check_count}){warning_msg}")
+            success += 1
+            continue
+
+        try:
+            parsed_id = save_parsed(
+                run_id=run_id,
+                source_issue_key=key,
+                sillog_data=data,
+                parser_version=parser_version,
+            )
+            print(f"{prefix}: 적재 완료 → parsed_id={parsed_id}{warning_msg}")
+            success += 1
+        except Exception as e:
+            error_msg = str(e)
+            if "uk_parsed" in error_msg.lower() or "unique constraint" in error_msg.lower():
+                print(f"{prefix}: 이미 적재됨 (skip)")
+                skipped += 1
+            else:
+                print(f"{prefix}: 적재 실패 - {error_msg}")
+                errors_log.append({"key": key, "error": error_msg})
+                failed += 1
+
+    print(f"\n{'='*50}")
+    print(f"[결과] 전체={len(files)} | 성공={success} | 스킵={skipped} | 실패={failed}")
+
+    if errors_log:
+        print(f"\n[실패 목록]")
+        for err in errors_log:
+            print(f"  - {err['key']}: {err['error']}")
+
+        error_log_path = parsed_dir / f"_load_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(error_log_path, "w", encoding="utf-8") as f:
+            json.dump(errors_log, f, ensure_ascii=False, indent=2)
+        print(f"\n  에러 로그 저장: {error_log_path}")
+
+    return success, skipped, failed

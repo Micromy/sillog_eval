@@ -5,7 +5,7 @@
 """
 from common.config import FILTER_ID, STORAGE_DIR
 from common.storage import save_pkl
-from parse.jira import get_jql_filter, get_sections_by_key
+from common.jira.client import get_jql_filter, get_sections_by_key
 
 
 def run() -> None:

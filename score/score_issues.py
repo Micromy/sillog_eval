@@ -14,7 +14,7 @@ from common.config import (
     STORAGE_DIR,
 )
 from common.llm import create_llm
-from score.scorer import score_issues_batch
+from common.scoring.scorer import score_issues_batch
 
 
 def run() -> None:

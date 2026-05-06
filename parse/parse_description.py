@@ -9,7 +9,7 @@ import sys
 from common.config import LLM_POOL_SIZE, STORAGE_DIR
 from common.llm import create_llm
 from common.storage import load_pkl
-from parse.llm_parser import parse_issues_parallel
+from common.jira.llm_parser import parse_issues_parallel
 
 
 def run() -> None:
