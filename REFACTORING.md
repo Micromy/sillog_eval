@@ -120,11 +120,18 @@ refactor: extractor.py dict/Pydantic 분기 통합
 
 ### 3. 모듈 구조 개선 ⬜ 예정
 
-#### 3-1. storage.py 역할 정리
+#### 3-1. storage.py 역할 정리 ✅
 
-루트 `storage.py`(pkl/json 3줄)와 `score_async.py` 내 저장 함수들
-(`save_item_result`, `save_meta`, `save_iteration`, `load_previous_results`)이 분리되어 있음.
-평가 결과 저장 로직을 `scorer/storage.py`로 분리 예정.
+루트 `storage.py`(pkl/json 3줄)는 범용 파일 I/O로 유지.
+`score_async.py` 내 저장 함수들(`save_item_result`, `save_meta`, `save_iteration`, `load_previous_results` + 경로 헬퍼 `_final_dir`/`_items_dir`/`_iteration_dir`)을 `scorer/storage.py`로 분리.
+
+**변경 파일:**
+- `scorer/storage.py` — 신규 (151줄, 4개 public + 3개 private 헬퍼)
+- `score_async.py` — 130줄 삭제 (저장 함수 정의 제거), 6줄 import 추가, `from pathlib import Path` 미사용으로 제거 (723줄 → 593줄)
+
+```
+refactor: 평가 결과 저장 헬퍼를 scorer/storage.py로 분리
+```
 
 #### 3-2. main.py 함수화
 
