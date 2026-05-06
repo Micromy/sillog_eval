@@ -100,10 +100,21 @@ fix: task_excution_method 오타 수정 → task_execution_method
 refactor: 공통 문자열 유틸을 common/text.py로 추출
 ```
 
-#### 2-2. extractor.py dict/Pydantic 중복 제거 ⬜ 예정
+#### 2-2. extractor.py dict/Pydantic 중복 제거 ✅
 
-dict 처리 ~80줄과 Pydantic 처리 ~60줄이 거의 동일한 로직.
-입구에서 `to_raw_dict()`로 dict 통일 후 Pydantic 분기 전체 삭제 예정.
+dict 처리 ~80줄과 Pydantic 처리 ~60줄이 거의 동일한 로직이었음.
+입구에서 dict로 통일(`model_dump()`/`dict()`) 후 Pydantic 분기 전체 삭제.
+
+**변경 파일:**
+- `scorer/extractor.py` — 184줄 → 113줄 (-70줄). dict 분기 단일 경로.
+
+**부수 효과:**
+- `description=None`인 Pydantic 입력 시 이전엔 AttributeError 크래시 → 빈 결과 반환으로 강건성 향상
+- 잘못된 타입 입력 시 명시적 `TypeError` 발생
+
+```
+refactor: extractor.py dict/Pydantic 분기 통합
+```
 
 ---
 
