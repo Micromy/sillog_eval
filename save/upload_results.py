@@ -25,9 +25,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from .common import db
-from .common.text import truncate
-from .config import STORAGE_DIR
+from common import db
+from common.text import truncate
+from common.config import STORAGE_DIR
 
 
 # ── rule_item 매핑 로드 ─────────────────────────────

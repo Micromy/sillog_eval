@@ -4,7 +4,7 @@ SillogData Extractor - Extract relevant information from SillogData structure
 """
 from typing import Dict, Any
 
-from ..common.convert import to_raw_dict
+from common.convert import to_raw_dict
 
 
 class SillogDataExtractor:

@@ -16,9 +16,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .common import db
-from .config import STORAGE_DIR
-from .parser.persistence import save_parsed
+from common import db
+from common.config import STORAGE_DIR
+from parse.persistence import save_parsed
 
 
 PARSED_SUBDIR = "parsed"

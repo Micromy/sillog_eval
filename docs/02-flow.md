@@ -1,41 +1,60 @@
 # 02. 플로우 (Flow)
 
-## End-to-end (main.py)
+## Task 디스패치 (run_task.py)
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│ 1. config 로드 (.env → PLATFORM, FILTER_ID, STORAGE_DIR, ...)       │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ 2. Jira fetch                                                       │
-│    - jira_issues.pkl 캐시 우선 (있으면 재사용)                       │
-│    - get_jql_filter(FILTER_ID) → JQL                                │
-│    - get_sections_by_key(jql) → {key: {description, checklist,     │
-│                                          outputs}} (HTML 섹션 분리) │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ 3. LLM 풀 생성 (LLM_POOL_SIZE개)                                    │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ 4. 병렬 파싱 (parse_issues_parallel) — 최대 3회 재시도 루프          │
-│    - PARSING_TEMPLATE.invoke({sections}) → prompt                   │
-│    - safe_structured_invoke(llm, prompt, SillogData)                │
-│    - {STORAGE_DIR}/parsed/{key}.json 저장                           │
-│    - 실패 key만 다음 attempt로 carry-over                           │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ 5. 일괄 평가 (score_issues_batch)                                   │
-│    - ThreadPoolExecutor(DEFAULT_MAX_WORKERS) → score_issue 병렬    │
-└─────────────────────────────────────────────────────────────────────┘
+$ python run_task.py <dag> <task_id> [extra args...]
+
+run_task.main():
+  1. argv 검증 (>= 3개)
+  2. importlib.import_module(f"{dag}.{task_id}")
+  3. module.run 존재 확인
+  4. sys.argv = [module_path] + sys.argv[3:]   # task가 표준 argparse 가능
+  5. module.run()
 ```
+
+## End-to-end 파이프라인 (3개 task 순차 실행)
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│ python run_task.py parse fetch_jira                                │
+│   - jira_issues.pkl 캐시 있으면 스킵 (idempotent)                   │
+│   - get_jql_filter(FILTER_ID) → JQL                                │
+│   - get_sections_by_key(jql) → {key: {description, checklist,     │
+│                                        outputs}} (HTML 섹션 분리)  │
+│   - {STORAGE_DIR}/jira_issues.pkl 저장                             │
+└────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌────────────────────────────────────────────────────────────────────┐
+│ python run_task.py parse parse_description                         │
+│   - jira_issues.pkl 로드 (없으면 에러)                             │
+│   - LLM 풀 생성 (LLM_POOL_SIZE개)                                  │
+│   - parse_issues_parallel — 최대 3회 재시도 루프                    │
+│     · PARSING_TEMPLATE.invoke({sections}) → prompt                 │
+│     · safe_structured_invoke(llm, prompt, SillogData)              │
+│     · {STORAGE_DIR}/parsed/{key}.json 저장                         │
+│     · 실패는 _parse_errors_<ts>.json에 카테고리별 누적              │
+│     · 실패 key만 다음 attempt로 carry-over                          │
+└────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌────────────────────────────────────────────────────────────────────┐
+│ python run_task.py score score_issues                              │
+│   - parsed/*.json 로드 (없으면 에러)                                │
+│   - LLM 풀 생성                                                     │
+│   - score_issues_batch                                              │
+│     · ThreadPoolExecutor(DEFAULT_MAX_WORKERS) → score_issue 병렬   │
+└────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ (선택적, DB 적재)
+┌────────────────────────────────────────────────────────────────────┐
+│ python run_task.py save upload_parsed [--dry-run]                  │
+│ python run_task.py save upload_results <model_name>                │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+각 task는 무인자 `run()` entry. 선행 task의 출력 파일이 없으면 stderr + exit(1).
 
 ## 단일 Issue 평가 (`score_issue`)
 
@@ -130,16 +149,16 @@
 
 성공 시 commit, 어느 단계든 예외 → 전체 rollback.
 
-## 운영 스크립트 흐름
+## save 도메인 task 흐름
 
-### `upload_parsed.py`
-`STORAGE_DIR/parsed/*.json` 발견 → 각 파일에 대해 `validate_sillog_structure` (warning) → `save_parsed` 호출. UK 위반은 skip, 그 외 실패는 `_load_errors_<ts>.json`에 누적.
+### `save upload_parsed`
+`STORAGE_DIR/parsed/*.json` 발견 → 각 파일에 대해 `validate_sillog_structure` (warning) → `save_parsed` 호출. UK 위반은 skip, 그 외 실패는 `_load_errors_<ts>.json`에 누적. `--dry-run`/`--run-id`/`--parser-version`/`--parsed-dir` 인자 지원.
 
-### `migrate_eval_results.py`
-`STORAGE_DIR/{model_name}/final/{key}/` 발견 → 로컬 `criterion_name`을 DB `eval_task_rule_item.item_name`에 매핑(avail='Y') → 같은 (task_id, eval_rule_set_id, eval_seq) 발견 시 자식부터 삭제 후 재적재.
+### `save upload_results`
+`STORAGE_DIR/{model_name}/final/{key}/` 발견 → 로컬 `criterion_name`을 DB `eval_task_rule_item.item_name`에 매핑(avail='Y') → 같은 (task_id, eval_rule_set_id, eval_seq) 발견 시 자식부터 삭제 후 재적재. 위치 인자 `model_name`, `--storage-dir`/`--keys`/`--keys-file` 지원.
 
-### `migrate_meta.py`
-기존 `_meta.json`에 `summary` 구조 필드(stats/supervisor 등)를 items 폴더 재계산으로 백필. `.bak` 백업 → dry-run 지원.
+### `save migrate_meta`
+기존 `_meta.json`에 `summary` 구조 필드(stats/supervisor 등)를 items 폴더 재계산으로 백필. `.bak` 백업, `--dry-run`/`--model` 지원.
 
-### `reset_eval_results.py`
-`eval_task_result*`를 `--rule-set-id` (+ 옵션 `--model-name`/`--created-by`) 기준 삭제. 기본 dry-run, `--execute` 명시해야 실삭제.
+### `save reset_results`
+`eval_task_result*`를 `--rule-set-id` (필수) + 옵션 `--model-name`/`--created-by` 기준 삭제. 기본 dry-run, `--execute` 명시해야 실삭제.

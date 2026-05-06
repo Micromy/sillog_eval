@@ -3,90 +3,97 @@
 ## 디렉토리 레이아웃
 
 ```
-sillog_eval/
-├── __init__.py                # 빈 패키지 마커
-├── config.py                  # 전역 설정 (env 로드, 프롬프트, 타임아웃)
-├── REFACTORING.md             # 리팩토링 진행 SOT
+sillog_eval/                       # repo root (NOT a Python package)
+├── run_task.py                    # CLI 진입점 (모든 task의 단일 dispatcher)
+├── REFACTORING.md                 # 리팩토링 진행 SOT
+├── README.md
+├── .gitignore
+├── docs/
 │
-├── main.py                    # end-to-end 진입점 (Jira → 파싱 → 평가)
+├── common/                        # 공유 헬퍼 (task 아님)
+│   ├── __init__.py
+│   ├── config.py                  # 전역 설정 (env 로드, 프롬프트, 타임아웃)
+│   ├── db.py                      # Oracle cursor/select/fetch/execute
+│   ├── llm.py                     # ChatOpenAI 팩토리 + safe_structured_invoke
+│   ├── storage.py                 # 범용 파일 I/O (pkl, json)
+│   ├── text.py                    # truncate, clob_or_none, safe_dict, safe_list
+│   └── convert.py                 # to_raw_dict (Pydantic | dict → dict)
 │
-├── jira.py                    # Jira REST 호출 + HTML 섹션 분리
-├── llm.py                     # LLM 클라이언트 팩토리 + safe_structured_invoke
-├── models.py                  # Pydantic 모델 (SillogData 계열)
-├── parsing_llm.py             # 병렬 파싱 (issues → SillogData)
-├── storage.py                 # 범용 파일 I/O (pkl, json)
+├── parse/                         # 파싱 도메인
+│   ├── __init__.py
+│   ├── fetch_jira.py              # task: Jira fetch + 섹션 분리 → jira_issues.pkl
+│   ├── parse_description.py       # task: pkl → LLM 파싱 → parsed/{key}.json
+│   ├── jira.py                    # 헬퍼: Jira REST + BeautifulSoup
+│   ├── llm_parser.py              # 헬퍼: parse_issues_parallel (병렬 LLM 호출)
+│   ├── models.py                  # 헬퍼: SillogData 계열 Pydantic
+│   └── persistence.py             # 헬퍼: SillogData → eval_task_parsed* 적재
 │
-├── score_async.py             # 평가 엔진 (정량 + 정성 + 감독관, 항목별 저장)
+├── score/                         # 평가 도메인
+│   ├── __init__.py                # 패키지 re-export (ChecklistResult 등)
+│   ├── score_issues.py            # task: parsed/*.json → 일괄 평가
+│   ├── scorer.py                  # 헬퍼: score_issues_batch / score_issue / build_summary
+│   ├── base.py                    # ChecklistResult / IssueScore / 정량·정성 체크리스트
+│   ├── extractor.py               # SillogData → 평탄화 텍스트 (LLM 입력용)
+│   ├── agents.py                  # CriteriaRefiner / SupervisorAgent
+│   ├── storage.py                 # 평가 결과 파일 I/O (save_item/save_meta 등)
+│   └── evaluators/
+│       ├── __init__.py
+│       └── quantitative.py        # 룰 기반 정량 평가 (LLM 무사용)
 │
-├── upload_parsed.py           # 로컬 parsed JSON → eval_task_parsed 적재
-├── migrate_eval_results.py    # 로컬 평가결과 → eval_task_result 마이그레이션
-├── migrate_meta.py            # _meta.json 포맷 마이그레이션 (summary 필드 추가)
-├── reset_eval_results.py      # eval_task_result 계열 리셋 (dry-run 기본)
-│
-├── common/
-│   ├── db.py                  # Oracle 연결/쿼리 헬퍼 (cursor/select/fetch/execute)
-│   └── text.py                # 문자열 유틸 (truncate/clob_or_none/safe_dict/safe_list)
-│
-├── parser/
-│   └── persistence.py         # eval_task_parsed 계열 5개 테이블 적재
-│
-└── scorer/
-    ├── __init__.py            # 패키지 re-export
-    ├── base.py                # ChecklistResult/IssueScore + 정량·정성 체크리스트
-    ├── extractor.py           # SillogData → 평탄화 텍스트 (LLM 입력용)
-    ├── agents.py              # CriteriaRefiner / SupervisorAgent
-    └── evaluators/
-        └── quantitative.py    # 룰 기반 정량 평가 (LLM 무사용)
+└── save/                          # DB저장 도메인
+    ├── __init__.py
+    ├── upload_parsed.py           # task: parsed/*.json → eval_task_parsed*
+    ├── upload_results.py          # task: 평가 결과 → eval_task_result*
+    ├── migrate_meta.py            # task: _meta.json 포맷 백필
+    └── reset_results.py           # task: eval_task_result* 삭제 (dry-run 기본)
 ```
+
+**루트는 패키지가 아니다** (`__init__.py` 없음). repo 루트가 CWD가 되어 `common`, `parse`, `score`, `save`가 top-level package로 import 됨. 이전 Airflow 패턴 그대로.
+
+## Task 인벤토리
+
+7개 task. 모두 무인자 `def run()` export.
+
+| 호출 | 설명 |
+|------|------|
+| `python run_task.py parse fetch_jira` | Jira fetch + 캐시 |
+| `python run_task.py parse parse_description` | LLM 파싱 (재시도 3회) |
+| `python run_task.py score score_issues` | 일괄 평가 |
+| `python run_task.py save upload_parsed` | parsed JSON → DB |
+| `python run_task.py save upload_results` | 평가 결과 → DB |
+| `python run_task.py save migrate_meta` | `_meta.json` 백필 |
+| `python run_task.py save reset_results` | 결과 테이블 삭제 |
+
+CLI 인자가 있는 task(save 도메인)는 dispatcher가 sys.argv를 task 기준으로 보정해서 표준 argparse 그대로 동작.
 
 ## 계층 책임
 
-### 진입 (`main.py`)
-- `config.py` 전역 설정 → Jira fetch → 파싱 → 평가 순서를 스크립트 레벨로 호출
-- 현재 함수화되어 있지 않음 (REFACTORING 3-2 예정)
+### `run_task.py`
+- `<dag>.<task_id>` 형태 동적 import → `module.run()` 호출
+- 호출 전 `sys.argv = [module_path] + sys.argv[3:]`로 보정 (task가 표준 argparse 사용 가능)
+- `run()` 미정의 모듈은 에러로 종료
 
-### 외부 연동
+### `common/` (공유 헬퍼)
 | 모듈 | 책임 |
 |------|------|
-| `jira.py` | atlassian-python-api로 JQL 조회 + `<div class="jefolding">` 단위 description/checklist/outputs 섹션 분리 |
-| `llm.py` | DTGPT / DS_LLM 두 플랫폼 분기로 `ChatOpenAI` 인스턴스 생성, `safe_structured_invoke`(structured → 수동 JSON → retry → None) |
+| `config.py` | `.env` 로드, PLATFORM 분기, 프롬프트, 타임아웃·동시성 defaults |
+| `llm.py` | DTGPT/DS_LLM 분기로 ChatOpenAI 인스턴스 생성, `safe_structured_invoke` (structured → 수동 JSON → retry → None) |
+| `db.py` | Oracle thin client, `cursor()` 컨텍스트 (commit/rollback 자동), `select`/`fetch`/`execute`/`execute_many` |
+| `storage.py` | pkl/json I/O (단순) |
+| `text.py` | VARCHAR2 byte-safe truncate, CLOB 변환, dict/list 안전 변환 |
+| `convert.py` | SillogData(Pydantic) | dict → dict 정규화 |
 
-### 데이터 모델 (`models.py`)
-- `SillogData`(루트) ⊃ `Description` + `checklist:list[str]` + `outputs:list[Output]`
-- `Description` ⊃ `purpose` + `input_data:list[InputData]` + `task_manager:Manager` + `task_execution_method` + `tool`
-- `InputData`/`Output` ⊃ `file_name`/`file_format`/`file_path` + `managers`(`receivers`)
-- `Manager` ⊃ `role` + `role_type` + `job_category`
-- 모든 노드에 `make_fill_nulls()` validator: None/"" → 타입에 맞는 빈 값으로 보정 (list→[], 중첩모델→None, str→"")
-- `checklist`는 str/dict 모두 받아서 list[str]로 정규화
+### `parse/` (파싱 도메인)
+- **task**: `fetch_jira` (Jira→pkl), `parse_description` (pkl→LLM→json)
+- **헬퍼**: `jira.py` (Jira REST + 섹션 분리), `models.py` (SillogData), `llm_parser.py` (병렬 LLM 호출), `persistence.py` (DB 적재)
 
-### 파싱
-- `parsing_llm.parse_issues_parallel(issues_by_key, llm_pools)`
-- ThreadPool로 LLM 풀 라운드로빈, 항목별 `{key}.json`을 `STORAGE_DIR/parsed/`에 저장
-- 실패 키만 추려 호출자(main)에서 최대 3회 재시도
+### `score/` (평가 도메인)
+- **task**: `score_issues` (parsed→평가→파일 저장)
+- **헬퍼**: `scorer.py` (orchestration: score_issue 라운드 루프, batch), `base.py` (체크리스트/dataclass), `extractor.py` (평탄화), `agents.py` (CriteriaRefiner/SupervisorAgent), `evaluators/quantitative.py` (룰 기반), `storage.py` (평가 결과 파일 I/O)
 
-### 평가 (`score_async.py` + `scorer/`)
-- 단건: `score_issue(key, sillog_data, llm_pool, model_name, ...)`
-- 일괄: `score_issues_batch(items, llm_pool, model_name, ...)` — `ThreadPoolExecutor(max_workers=DEFAULT_MAX_WORKERS)`
-- 단계:
-  1. **정량** (`QuantitativeEvaluator`, 룰 기반, LLM 무사용)
-  2. **정성** (라운드 루프, `evaluate_qualitative_batch`, LLM 풀 병렬)
-  3. **감독관** (`SupervisorAgent.review`, retry wrapper)
-  4. 미승인 시 `CriteriaRefiner`로 다음 라운드 기준 고도화
-  5. 최종 점수 + 총평 → 항목별 + 메타 + 라운드 스냅샷 파일 저장
-
-### 저장 / 영속화
-| 레이어 | 모듈 | 매핑 대상 |
-|--------|------|-----------|
-| 평가 결과 (파일) | `score_async.save_item_result` / `save_meta` / `save_iteration` | `EVAL_TASK_RESULT_ITEM` / `EVAL_TASK_RESULT` / (디버깅) |
-| 파싱 결과 (DB) | `parser.persistence.save_parsed` | `eval_task_parsed` + `_input` + `_output` + `_check` + `_manager` |
-| 평가 결과 (DB 마이그레이션) | `migrate_eval_results.py` | `eval_task_result` 계열 |
-| DB 헬퍼 | `common.db` | Oracle thin client, `cursor()` 컨텍스트 (commit/rollback 자동) |
-
-### 운영 스크립트
-- `upload_parsed.py` — 로컬 `parsed/*.json` 일괄 적재 (CLI, dry-run 지원)
-- `migrate_eval_results.py` — 로컬 평가결과 디렉토리 → DB 일괄 적재
-- `migrate_meta.py` — 기존 `_meta.json`에 `summary` 구조 필드 백필
-- `reset_eval_results.py` — `eval_task_result` 계열 삭제 (기본 dry-run, `--execute` 명시 필요)
+### `save/` (DB저장 도메인)
+- **task**: `upload_parsed`, `upload_results`, `migrate_meta`, `reset_results`
+- 각 task는 자체 argparse로 CLI 인자 처리. 헬퍼는 task 파일 내부에 함께 (migration 로직이 task 단위로 응집되어 있어 분리하지 않음)
 
 ## 외부 의존
 - `langchain_openai` / `langchain_core` — LLM 호출 + structured output

@@ -7,42 +7,27 @@
 
 ## 현재 프로젝트 구조
 
+(상세는 `docs/01-structure.md`)
+
 ```
-sillog_eval/
-├── __init__.py                    # (빈 파일)
-├── config.py                      # 전역 설정 (프롬프트, LLM 접속정보, 타임아웃 등)
-├── DESIGN.md                      # 설계 문서 (10개 섹션 + 부록)
+sillog_eval/                       # repo root, NOT a Python package
+├── run_task.py                    # CLI dispatcher (python run_task.py <dag> <task_id>)
+├── REFACTORING.md
+├── README.md / docs/ / .gitignore
 │
-├── main.py                        # 메인 진입점 (Jira fetch → 파싱 → 평가)
-├── jira.py                        # Jira 연동 (이슈 조회, HTML 섹션 분리)
-├── llm.py                         # LLM 클라이언트 팩토리 + safe_structured_invoke
-├── models.py                      # Pydantic 모델 (SillogData, Manager, InputData 등)
-├── parsing_llm.py                 # LLM 병렬 파싱 (issues → SillogData)
-├── storage.py                     # 범용 파일 I/O (pkl, json)
-├── score_async.py                 # 평가 엔진 (정량+정성+감독관, 항목별 파일 저장)
-│
-├── upload_parsed.py               # 로컬 parsed JSON → DB 적재 스크립트
-├── migrate_eval_results.py        # 로컬 평가 결과 → DB 마이그레이션
-├── migrate_meta.py                # 기존 _meta.json 포맷 마이그레이션
-├── reset_eval_results.py          # 평가 결과 테이블 리셋 (dry-run 지원)
-│
-├── common/
-│   ├── __init__.py
-│   ├── db.py                      # Oracle 연결/쿼리 헬퍼 (cursor, select, fetch 등)
-│   └── text.py                    # ★ 신규 - 문자열/데이터 변환 유틸
-│
-├── parser/
-│   ├── __init__.py
-│   └── persistence.py             # eval_task_parsed 계열 적재 (save_parsed, 배치)
-│
-└── scorer/
-    ├── __init__.py                # 패키지 re-export
-    ├── base.py                    # 데이터 클래스 (ChecklistResult, IssueScore, 체크리스트)
-    ├── agents.py                  # CriteriaRefiner, SupervisorAgent (LLM)
-    ├── extractor.py               # SillogDataExtractor (SillogData → 평탄화 텍스트)
-    └── evaluators/
-        ├── __init__.py
-        └── quantitative.py        # QuantitativeEvaluator (Rule 기반 정량 평가)
+├── common/                        # 공유 헬퍼 (config/db/llm/storage/text/convert)
+├── parse/                         # 파싱 도메인
+│   ├── fetch_jira.py             ← task
+│   ├── parse_description.py      ← task
+│   └── jira/llm_parser/models/persistence (헬퍼)
+├── score/                         # 평가 도메인
+│   ├── score_issues.py           ← task
+│   └── scorer/base/extractor/agents/storage/evaluators (헬퍼)
+└── save/                          # DB저장 도메인
+    ├── upload_parsed.py          ← task
+    ├── upload_results.py         ← task
+    ├── migrate_meta.py           ← task
+    └── reset_results.py          ← task
 ```
 
 ---
@@ -224,6 +209,40 @@ refactor: jira.py / storage.py / main.py 타입 힌트 보강
 
 ```
 refactor: parsing_llm.py 에러 수집/리포트 패턴 적용
+```
+
+---
+
+### R. 디렉토리 재편성 (task-dispatch 구조) ✅
+
+이전 Airflow `run_task.py` 패턴으로 전면 재편성. 루트가 더 이상 패키지 아님.
+
+**변경:**
+- 루트 `__init__.py` 삭제, `main.py` 삭제 (run_task.py + 3개 task로 분할)
+- 디렉토리 이름 변경: `parser/` → `parse/`, `scorer/` → `score/`
+- 신규 디렉토리: `save/` (DB저장 도메인)
+- 헬퍼 파일 이동:
+  - `config.py`, `llm.py`, `storage.py` → `common/`
+  - `jira.py`, `models.py`, `parsing_llm.py`(→`llm_parser.py`), `parser/persistence.py` → `parse/`
+  - `score_async.py`(→`scorer.py`), `scorer/*` → `score/`
+  - `upload_parsed.py`, `migrate_eval_results.py`(→`upload_results.py`), `migrate_meta.py`, `reset_eval_results.py`(→`reset_results.py`) → `save/`
+- 신규 task entry 3개: `parse/fetch_jira.py`, `parse/parse_description.py`, `score/score_issues.py`
+- 모든 상대 import → 절대 import (`from common.config import ...` 등). 같은 패키지 내 sibling은 `from .X` 유지.
+- `run_task.py`에 `sys.argv` 보정 로직 추가 → task가 표준 argparse 사용 가능
+
+**Task 인벤토리:**
+| 호출 | 모듈 | 비고 |
+|------|------|------|
+| `parse fetch_jira` | `parse/fetch_jira.py` | Jira → pkl, 캐시 idempotent |
+| `parse parse_description` | `parse/parse_description.py` | pkl → LLM → json (재시도 3회) |
+| `score score_issues` | `score/score_issues.py` | parsed → 평가 |
+| `save upload_parsed` | `save/upload_parsed.py` | parsed → DB |
+| `save upload_results` | `save/upload_results.py` | 평가 결과 → DB |
+| `save migrate_meta` | `save/migrate_meta.py` | `_meta.json` 백필 |
+| `save reset_results` | `save/reset_results.py` | 결과 테이블 삭제 |
+
+```
+refactor: task-dispatch 구조로 재편성 (run_task.py + 3개 도메인)
 ```
 
 ---

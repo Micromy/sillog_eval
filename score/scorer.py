@@ -33,24 +33,18 @@ from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_core.runnables import RunnableConfig
 
-from .scorer import (
-    ChecklistResult,
-    IssueScore,
-    QuantitativeEvaluator,
-    QUANTITATIVE_CHECKLIST,
-    QUALITATIVE_CHECKLIST,
-    SillogDataExtractor,
-    CriteriaRefiner,
-    SupervisorAgent,
-)
-from .scorer.storage import (
+from .base import ChecklistResult, IssueScore, QUANTITATIVE_CHECKLIST, QUALITATIVE_CHECKLIST
+from .evaluators.quantitative import QuantitativeEvaluator
+from .extractor import SillogDataExtractor
+from .agents import CriteriaRefiner, SupervisorAgent
+from .storage import (
     save_item_result,
     save_meta,
     save_iteration,
     load_previous_results,
 )
-from .common.convert import to_raw_dict
-from .config import (
+from common.convert import to_raw_dict
+from common.config import (
     SCORE_MAP,
     EVALUATE_PROMPT,
     DEFAULT_MAX_ROUNDS,

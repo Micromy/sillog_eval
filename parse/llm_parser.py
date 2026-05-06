@@ -2,10 +2,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 from datetime import datetime
 
-from .config import STORAGE_DIR, PARSING_TEMPLATE
-from .llm import safe_structured_invoke
+from common.config import STORAGE_DIR, PARSING_TEMPLATE
+from common.llm import safe_structured_invoke
+from common.storage import save_json
 from .models import SillogData
-from .storage import save_json
 
 
 def parse_issues_parallel(

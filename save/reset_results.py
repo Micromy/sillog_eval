@@ -32,7 +32,7 @@ import argparse
 import sys
 from typing import List, Optional
 
-from .common import db
+from common import db
 
 
 # ── 영향 범위 조회 ──────────────────────────────────

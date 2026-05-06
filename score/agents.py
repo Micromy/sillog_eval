@@ -11,7 +11,7 @@ from typing import Dict, List, Tuple, Any
 from langchain_core.runnables import RunnableConfig
 
 from .base import IssueScore, ChecklistResult
-from ..config import REFINE_PROMPT, REVIEW_PROMPT, LLM_TIMEOUT
+from common.config import REFINE_PROMPT, REVIEW_PROMPT, LLM_TIMEOUT
 
 
 class CriteriaRefiner:
