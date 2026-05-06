@@ -83,7 +83,7 @@ fix: task_excution_method 오타 수정 → task_execution_method
 
 ---
 
-### 2. 중복 제거 🔄 진행 중
+### 2. 중복 제거 ✅ 완료
 
 #### 2-1. 공통 유틸 함수 추출 ✅
 
@@ -118,7 +118,7 @@ refactor: extractor.py dict/Pydantic 분기 통합
 
 ---
 
-### 3. 모듈 구조 개선 ⬜ 예정
+### 3. 모듈 구조 개선 ✅ 완료
 
 #### 3-1. storage.py 역할 정리 ✅
 
@@ -182,7 +182,7 @@ refactor: to_raw_dict를 common/convert.py로 추출
 
 ---
 
-### 4. 코드 품질 🔄 진행 중
+### 4. 코드 품질 ✅ 완료
 
 #### 4-1. wildcard import 제거 ✅
 
@@ -209,9 +209,22 @@ refactor: wildcard import 제거 (llm.py, main.py)
 refactor: jira.py / storage.py / main.py 타입 힌트 보강
 ```
 
-#### 4-3. 에러 핸들링 패턴 통일 ⬜ 예정
+#### 4-3. 에러 핸들링 패턴 통일 ✅
 
-`parsing_llm.py`의 silent skip → 에러 수집/리포트로 변경.
+`parsing_llm.py`의 silent skip(콘솔 print만)을 카테고리별 에러 수집 + 파일 리포트로 전환.
+
+**변경 내용:**
+- 실패 케이스를 두 카테고리로 분류:
+  - `exception` — future.result() 예외
+  - `parse_failed` — `safe_structured_invoke`가 None 반환
+- 실행 끝에 카테고리별 카운트 요약 (`성공 N건 / 실패 M건 (exception=X, parse_failed=Y)`)
+- 실패 1건 이상이면 `{STORAGE_DIR}/{output_dir}/_parse_errors_<ts>.json`에 구조화된 로그 저장 (`upload_parsed.py`의 `_load_errors_*.json` 패턴과 동일)
+- 함수 시그니처 타입 힌트 추가 (4-2 후속)
+- 호출자(main.py) 인터페이스(2-tuple) 유지
+
+```
+refactor: parsing_llm.py 에러 수집/리포트 패턴 적용
+```
 
 ---
 

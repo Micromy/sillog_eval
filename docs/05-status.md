@@ -21,7 +21,7 @@
 | 3-3. `to_raw_dict` → `common/convert.py` 추출 (3곳 중복 → 단일 정의) | ✅ |
 | 4-1. `llm.py`/`main.py`의 wildcard import 제거 (명시 import) | ✅ |
 | 4-2. 타입 힌트 보강 (`jira.py`, `storage.py`, `main.py`) | ✅ |
-| 4-3. `parsing_llm.py` 에러 핸들링 (silent skip → 수집/리포트) | ⬜ |
+| 4-3. `parsing_llm.py` 에러 수집/리포트 (`_parse_errors_*.json` 저장) | ✅ |
 
 ## 미연동 / 운영 갭
 
@@ -33,8 +33,9 @@
 
 ## 다음 작업 추천
 
-1. `.env` 템플릿(`.env.example`) 작성 + README 셋업 절 추가 (커밋용은 변수명만)
-2. 4-1: `llm.py`의 wildcard import (`from .config import *`) 명시 import로 변경
-3. 3-3: `to_raw_dict` 등 변환 헬퍼 → `common/convert.py` 추출
-4. 4-2/4-3: 타입 힌트 + 에러 핸들링 보강
-5. 통합 동작 테스트 (소량 이슈 1~2건으로 `python -m sillog_eval.main` 라운드트립)
+REFACTORING.md 1~4번 섹션 모두 완료. 남은 것은 운영 셋업·검증 작업.
+
+1. `.env` 템플릿(`.env.example`) 작성 + README 셋업 절 추가 (커밋용은 변수명만, 값은 `.env`에서 로컬 관리)
+2. `STORAGE_DIR` Windows 경로 기본값 → 환경 비종속(상대 경로 또는 None+검증) 으로 정리
+3. 통합 동작 테스트 (소량 이슈 1~2건으로 `python -m sillog_eval.main` 라운드트립)
+4. 운영 DB DDL 적용 + Jira/Oracle/LLM 연결 점검
