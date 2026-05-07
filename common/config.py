@@ -57,7 +57,14 @@ DEFAULT_MAX_WORKERS = int(os.environ.get("SCORER_MAX_WORKERS", "3"))
 DEFAULT_MAX_QUAL_WORKERS = int(os.environ.get("SCORER_MAX_QUAL_WORKERS", "5"))
 
 # ── 프롬프트 ────────────────────────────────────────
-EVALUATE_PROMPT = """..."""  # 실제 프롬프트는 로컬에서 관리
+# 실제 프롬프트는 로컬에서 관리. 사용 가능한 placeholder:
+#   EVALUATE_PROMPT: {criterion_name}, {question}, {refinement_section}, {context}
+#     - {context}는 코드가 동적 조립 (target_fields에 따라 [목적]/[Input 데이터]/...
+#       라벨 섹션 포함). 항목별 필드 제한은 eval_task_rule_item.target_fields 컬럼.
+#   REFINE_PROMPT, REVIEW_PROMPT: {key}, {purpose}, {input_data}, {task}, {output},
+#     {checklist}, {quant_results}, {qual_results}, {summary}
+#     (감독관/refiner는 항상 5개 필드 모두 봄)
+EVALUATE_PROMPT = """..."""
 REFINE_PROMPT = """..."""
 REVIEW_PROMPT = """..."""
 PARSING_TEMPLATE = None  # ChatPromptTemplate 인스턴스 — 로컬에서 설정

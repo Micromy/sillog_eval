@@ -7,14 +7,16 @@ from typing import Dict, List, Tuple, Optional
 import re
 
 from common.constants import PassFail
+from common.db.rules import RuleItem
 from ..base import ChecklistResult
 
 
 class QuantitativeEvaluator:
     """정량 평가 - Rule 기반 판단 (구조화된 데이터 기반).
 
-    DB의 `eval_task_rule_item`에서 로드된 (item_name, criteria_text)를 받아
-    `_REGISTRY[item_name]`에 등록된 함수로 평가. registry에 없으면 FAIL 처리.
+    DB의 `eval_task_rule_item`에서 로드된 RuleItem(item_name, criteria_text, target_fields)를
+    받아 `_registry[item_name]`에 등록된 함수로 평가. registry에 없으면 FAIL 처리.
+    target_fields는 정량 평가에서는 무시 (registry 함수가 raw_data에서 필요한 필드 직접 접근).
     """
 
     GOAL_OBJECTS = ["기능", "정합성", "오류", "검증", "배포", "연동", "수집", "가공", "삭제", "매핑", "테스트"]
@@ -48,11 +50,11 @@ class QuantitativeEvaluator:
             "output_receiver": lambda ctx: self._eval_list_managers(ctx["outputs_list"], "receivers", "산출물 수신자"),
         }
 
-    def evaluate(self, rule_items: Dict[str, str], data: Dict) -> list[ChecklistResult]:
+    def evaluate(self, rule_items: Dict[str, RuleItem], data: Dict) -> list[ChecklistResult]:
         """DB에서 로드된 정량 rule items에 대해 평가.
 
         Args:
-            rule_items: {item_name: criteria_text} (DB의 eval_method='rule' 항목)
+            rule_items: {item_name: RuleItem} (DB의 eval_method='rule' 항목)
             data: SillogData를 dict화한 raw 데이터
 
         Returns:
@@ -72,12 +74,12 @@ class QuantitativeEvaluator:
         }
 
         results = []
-        for name, criteria_text in rule_items.items():
+        for name, rule_item in rule_items.items():
             fn = self._registry.get(name)
             if fn is None:
                 results.append(ChecklistResult(
                     criterion_name=name,
-                    question=criteria_text,
+                    question=rule_item.criteria_text,
                     pass_fail=PassFail.FAIL,
                     reasoning=f"평가 함수 미구현: {name}",
                 ))
@@ -85,7 +87,7 @@ class QuantitativeEvaluator:
             score, reasoning = fn(context)
             results.append(ChecklistResult(
                 criterion_name=name,
-                question=criteria_text,
+                question=rule_item.criteria_text,
                 pass_fail=self._score_to_pass_fail(score),
                 reasoning=reasoning,
             ))

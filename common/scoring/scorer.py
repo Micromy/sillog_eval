@@ -33,7 +33,7 @@ from common.db.result import (
     mark_result_failed,
     populate_result,
 )
-from common.db.rules import load_rule_items, load_rule_item_id_map
+from common.db.rules import RuleItem, load_rule_items, load_rule_item_id_map
 from common.shutdown import FailureCounter
 from common.config import (
     EVALUATE_PROMPT,
@@ -60,12 +60,44 @@ def calc_weighted_score(quant_results, qual_results):
     return round((total / len(all_results)) * 100, 2)
 
 
+# ── 평가 컨텍스트 빌더 ─────────────────────────────
+
+EVAL_FIELD_LABELS = [
+    ("purpose",    "[목적]"),
+    ("input_data", "[Input 데이터]"),
+    ("task",       "[Task 정보]"),
+    ("output",     "[Output]"),
+    ("checklist",  "[완료 조건]"),
+]
+"""LLM 평가 프롬프트에 포함되는 필드 (코드명, 한국어 라벨) 순서대로."""
+
+ALL_EVAL_FIELDS = {f for f, _ in EVAL_FIELD_LABELS}
+
+
+def build_evaluate_context(extracted_data: Dict[str, str], target_fields: List[str]) -> str:
+    """target_fields가 빈 list면 5개 모두, 아니면 명시된 것만 라벨과 함께 포함.
+
+    알 수 없는 필드명은 silently skip (whitelist 적용).
+    """
+    if not target_fields:
+        wanted = ALL_EVAL_FIELDS
+    else:
+        wanted = set(target_fields) & ALL_EVAL_FIELDS
+    parts = []
+    for field_name, label in EVAL_FIELD_LABELS:
+        if field_name not in wanted:
+            continue
+        value = extracted_data.get(field_name, "") or ""
+        parts.append(f"{label}\n{value}")
+    return "\n\n".join(parts)
+
+
 # ── 정성 평가 (병렬 batch) ─────────────────────────
 
 def evaluate_qualitative_batch(
     extracted_data,
     llm_pool,
-    target_criteria: Dict[str, str],
+    target_criteria: Dict[str, RuleItem],
     max_workers=DEFAULT_MAX_QUAL_WORKERS,
     max_retries=DEFAULT_MAX_RETRIES,
     retry_delay=DEFAULT_RETRY_DELAY,
@@ -75,7 +107,7 @@ def evaluate_qualitative_batch(
     """여러 정성 항목 병렬 평가.
 
     Args:
-        target_criteria: {item_name: criteria_text} (DB의 eval_method='llm' 항목)
+        target_criteria: {item_name: RuleItem} (DB의 eval_method='llm' 항목)
 
     Returns:
         (results: List[ChecklistResult], error_log: List[Dict])
@@ -88,21 +120,18 @@ def evaluate_qualitative_batch(
 
     items = list(criteria.items())
 
-    def evaluate_one(idx, name, question):
+    def evaluate_one(idx, name, rule_item: RuleItem):
         """단일 항목 평가 (retry 포함)"""
         llm = llm_pool[idx % len(llm_pool)]
         refinement = refinements.get(name, "")
         refinement_section = f"추가 판단 기준: {refinement}" if refinement else ""
+        context = build_evaluate_context(extracted_data, rule_item.target_fields)
 
         prompt = EVALUATE_PROMPT.format(
             criterion_name=name,
-            question=question,
+            question=rule_item.criteria_text,
             refinement_section=refinement_section,
-            purpose=extracted_data.get("purpose", ""),
-            input_data=extracted_data.get("input_data", ""),
-            task=extracted_data.get("task", ""),
-            output=extracted_data.get("output", ""),
-            checklist=extracted_data.get("checklist", ""),
+            context=context,
         )
 
         last_error = None
@@ -138,15 +167,15 @@ def evaluate_qualitative_batch(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(evaluate_one, idx, name, question): name
-            for idx, (name, question) in enumerate(items)
+            executor.submit(evaluate_one, idx, name, rule_item): name
+            for idx, (name, rule_item) in enumerate(items)
         }
 
         completed = 0
         for future in as_completed(futures):
             completed += 1
             name = futures[future]
-            question = criteria[name]
+            question = criteria[name].criteria_text
 
             try:
                 pass_fail, reasoning, attempts, error_info = future.result(timeout=QUAL_BATCH_FUTURE_TIMEOUT)
@@ -325,8 +354,8 @@ def score_issue(
     model_name: str,
     run_id: str,
     eval_rule_set_id: int,
-    target_quant: Dict[str, str],
-    target_qual: Dict[str, str],
+    target_quant: Dict[str, RuleItem],
+    target_qual: Dict[str, RuleItem],
     rule_item_map: Dict[str, int],
     eval_seq: int = 1,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
@@ -337,8 +366,8 @@ def score_issue(
     """단일 Issue 평가 + DB 적재.
 
     Args:
-        target_quant: 정량 rule items {item_name: criteria_text}
-        target_qual:  정성 rule items {item_name: criteria_text}
+        target_quant: 정량 rule items {item_name: RuleItem}
+        target_qual:  정성 rule items {item_name: RuleItem}
         rule_item_map: {item_name: eval_rule_item_id} (자식 적재용)
 
     Returns:

@@ -28,6 +28,7 @@
 | **R-3. 하드코딩 상수 중앙화 (constants.py + db/schema.py)** | ✅ (2026-05-06) |
 | **R-4. rule item DB SOT 통합 + Quantitative registry 패턴** | ✅ (2026-05-06) |
 | **R-5. API 셧다운 + 재개 + DB 직접 적재 (로컬 결과 파일 제거)** | ✅ (2026-05-07) |
+| **R-6. 항목별 target_fields — LLM 평가 필드 제한** | ✅ (2026-05-07) |
 
 ### R-5: API 셧다운 + 재개 + DB SOT
 

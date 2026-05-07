@@ -134,16 +134,32 @@ YN.{YES, NO}
 |------|-----|------|
 | `JIRA_KEY_ATTR_MASTER_ID` | 17 | sillog_tasks_attr 매핑용 |
 | `JIRA_CACHE_FILENAME` | `"jira_issues.pkl"` | fetch_jira 출력 |
-| `PARSED_SUBDIR` | `"parsed"` | parse_description 출력 디렉토리 |
-| `FINAL_SUBDIR` | `"final"` | 평가 최종 결과 |
-| `ITEMS_SUBDIR` | `"items"` | 항목별 결과 |
-| `ITERATION_SUBDIR` | `"iteration"` | 라운드별 스냅샷 |
-| `META_FILENAME` | `"_meta.json"` | 평가 메타 |
-| `LOAD_ERROR_PREFIX` | `"_load_errors_"` | upload_parsed 실패 로그 |
-| `PARSE_ERROR_PREFIX` | `"_parse_errors_"` | parse_description 실패 로그 |
-| `BACKUP_SUFFIX` | `".bak"` | migrate_meta 백업 |
+| `PARSED_SUBDIR` | `"parsed"` | (legacy) 옛 parse_description 출력 |
+| `FINAL_SUBDIR` | `"final"` | (legacy) 옛 평가 최종 결과 |
+| `ITEMS_SUBDIR` | `"items"` | (legacy) 옛 항목별 결과 |
+| `ITERATION_SUBDIR` | `"iteration"` | (legacy) 옛 라운드별 스냅샷 |
+| `META_FILENAME` | `"_meta.json"` | (legacy) 옛 평가 메타 |
+| `BACKUP_SUFFIX` | `".bak"` | save migrate_meta 백업 |
 | `JIRA_FETCH_LIMIT` | 500 | JQL 페이지당 최대 |
 | `ORACLE_IN_CHUNK_SIZE` | 500 | Oracle IN 절 1000개 제한 회피 |
+
+### 8-2-1. LLM 평가 필드 제한 (`eval_task_rule_item.target_fields`)
+
+정성 평가(`eval_method='llm'`) 시 LLM 프롬프트의 `{context}`에 포함될 평탄화 필드를
+DB 컬럼으로 제어. 평탄화 필드 5개(`purpose`, `input_data`, `task`, `output`, `checklist`).
+
+| `target_fields` 값 | 의미 |
+|--------------------|------|
+| `NULL` 또는 `''` | 5개 모두 (default) |
+| `'purpose'` | purpose만 |
+| `'purpose,checklist'` | 두 필드 |
+| `'unknown_field,purpose'` | purpose만 (unknown은 silently skip) |
+
+코드:
+- `common/db/rules.py`의 `RuleItem.target_fields: list[str]` (빈 list = 전체)
+- `common/scoring/scorer.py`의 `build_evaluate_context(extracted_data, target_fields)` 가 라벨 섹션 동적 조립
+
+정량 평가(`eval_method='rule'`)는 registry 함수가 raw_data를 직접 access하므로 target_fields 무시.
 
 ### 8-3. DB 컬럼 길이 (`common/db/schema.py`)
 테이블 별 dict로 정의: `PARSED_COLUMN_BYTES`, `INPUT_COLUMN_BYTES`, `OUTPUT_COLUMN_BYTES`, `MANAGER_COLUMN_BYTES`, `RESULT_COLUMN_BYTES`. DDL 변경 시 이 dict만 수정.

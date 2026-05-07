@@ -409,6 +409,63 @@ refactor: API 셧다운 + 재개 + DB SOT 통합 (placeholder/populate 패턴, �
 
 ---
 
+### R-6. 항목별 target_fields — LLM 평가 필드 제한 ✅
+
+정성 평가의 LLM 프롬프트에 들어가는 평탄화 필드를 항목별로 DB에서 제어.
+필요 없는 필드는 noise이므로 항목 성격에 맞는 것만 선택해 평가 정확도/효율 개선.
+
+**DDL 변경 (사내 적용 완료):**
+```sql
+ALTER TABLE eval_task_rule_item ADD target_fields VARCHAR2(200);
+-- NULL/empty → 5개 모두 (purpose, input_data, task, output, checklist)
+-- 'purpose' → purpose만
+-- 'purpose,checklist' → 두 필드만
+-- unknown 필드명은 silently skip (whitelist 검증)
+```
+
+**프롬프트 placeholder 변경:**
+
+이전 EVALUATE_PROMPT는 5개 placeholder(`{purpose}, {input_data}, {task}, {output}, {checklist}`)를 직접 받음.
+이번 R-6에서 `{context}` 1개 placeholder로 변경 — 코드가 `target_fields`에 따라 라벨 섹션을 동적으로 조립.
+
+REFINE_PROMPT, REVIEW_PROMPT는 변경 없음 (감독관/refiner는 항상 5개 모두 봄).
+
+**구현:**
+- `common/db/rules.py`:
+  - `RuleItem` dataclass 추가 (`item_name`, `criteria_text`, `target_fields: list[str]`)
+  - `_parse_target_fields()` (NULL/empty → []. 'a,b' → ['a', 'b'])
+  - `load_rule_items` 반환 타입 `dict[str, str]` → `dict[str, RuleItem]`
+- `common/scoring/scorer.py`:
+  - `EVAL_FIELD_LABELS` 정의 (5개 (코드명, 라벨) tuple list)
+  - `build_evaluate_context(extracted_data, target_fields)` 신규 — 라벨 섹션 조립
+  - `evaluate_qualitative_batch`/`evaluate_one`: prompt에 `{context}` 사용, RuleItem 받음
+  - `score_issue` 시그니처 `target_quant`/`target_qual`을 `Dict[str, RuleItem]`으로
+- `common/scoring/evaluators/quantitative.py`:
+  - `evaluate(rule_items: Dict[str, RuleItem], data)` — target_fields는 정량에서 무시
+- `common/config.py`: EVALUATE_PROMPT placeholder 안내 주석 갱신
+
+**사용자 측 작업 (PR 머지 후):**
+로컬 EVALUATE_PROMPT 템플릿이 5개 placeholder를 사용했다면 `{context}` 1개로 변경:
+```
+# 이전: "...\n목적: {purpose}\nInput: {input_data}\n... 완료조건: {checklist}\n..."
+# 이후: "...\n{context}\n..."
+```
+REFINE/REVIEW 템플릿은 변경 불필요.
+
+**검증 시나리오:**
+```sql
+UPDATE eval_task_rule_item SET target_fields = NULL WHERE item_name = 'goal_state_included';
+UPDATE eval_task_rule_item SET target_fields = 'purpose' WHERE item_name = 'goal_state_included';
+UPDATE eval_task_rule_item SET target_fields = 'purpose,checklist' WHERE item_name = 'completion_pass_fail';
+```
+실행 시 LLM 프롬프트에 `[목적]`/`[Input 데이터]` 등 라벨이 target_fields에 따라 포함/제외 확인.
+
+```
+refactor: 항목별 target_fields로 LLM 평가 필드 제한 ({context} placeholder)
+```
+
+---
+
 ## 정리 규칙
 
 - 코드 변경 시 커밋 메시지 함께 기록

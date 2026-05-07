@@ -66,8 +66,18 @@ class IssueScore:
 **체크리스트 SOT**: DB의 `eval_task_rule_item` 테이블 (avail='Y' 항목).
 - `eval_method = 'rule'` → 정량 (repo의 `QuantitativeEvaluator._registry`에 함수가 매칭되는 항목만 평가, 미매칭은 FAIL)
 - `eval_method = 'llm'` → 정성 (LLM이 `criteria_text`를 받아 평가)
+- `target_fields` (VARCHAR2(200), nullable) → LLM 평가 시 포함할 평탄화 필드 제한 (정성 전용, 정량은 무시)
+  - `NULL` 또는 빈 문자열: 5개 모두 (`purpose`, `input_data`, `task`, `output`, `checklist`)
+  - `'purpose'`: purpose만
+  - `'purpose,checklist'`: 두 필드만
+  - 알 수 없는 필드명은 silently skip
 
-평가 task 시작 시 `common.db.rules.load_rule_items(eval_method)`로 `{item_name: criteria_text}` 로드.
+평가 task 시작 시 `common.db.rules.load_rule_items(eval_method)`로 `{item_name: RuleItem}` 로드.
+
+`RuleItem` 구조 (`common/db/rules.py`):
+- `item_name: str`
+- `criteria_text: str`
+- `target_fields: list[str]` — 빈 list면 전체 필드
 
 repo 정량 registry에 등록된 함수 키 (현재 7개):
 - `input_data_name`, `input_location`, `input_provider`, `task_owner`, `output_filename`, `output_location`, `output_receiver`
