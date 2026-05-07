@@ -98,11 +98,11 @@ def evaluate_qualitative_batch(
             criterion_name=name,
             question=question,
             refinement_section=refinement_section,
-            goal=extracted_data.get("goal", ""),
+            purpose=extracted_data.get("purpose", ""),
             input_data=extracted_data.get("input_data", ""),
             task=extracted_data.get("task", ""),
             output=extracted_data.get("output", ""),
-            completion=extracted_data.get("completion", ""),
+            checklist=extracted_data.get("checklist", ""),
         )
 
         last_error = None

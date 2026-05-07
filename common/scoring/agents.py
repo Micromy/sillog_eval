@@ -22,22 +22,22 @@ class CriteriaRefiner:
 
     @staticmethod
     def refine(key, extracted_data, previous_score, llm, stream_console_output=False):
-        goal = extracted_data.get("goal", "")
+        purpose = extracted_data.get("purpose", "")
         input_data = extracted_data.get("input_data", "")
         task = extracted_data.get("task", "")
         output = extracted_data.get("output", "")
-        completion = extracted_data.get("completion", "")
+        checklist = extracted_data.get("checklist", "")
 
         quant_str = "\n".join([f"- {r.criterion_name}: {r.pass_fail} ({r.reasoning})" for r in previous_score.quantitative_results])
         qual_str = "\n".join([f"- {r.criterion_name}: {r.pass_fail} ({r.reasoning})" for r in previous_score.qualitative_results])
 
         prompt = REFINE_PROMPT.format(
             key=key,
-            goal=goal,
+            purpose=purpose,
             input_data=input_data,
             task=task,
             output=output,
-            completion=completion,
+            checklist=checklist,
             quant_results=quant_str,
             qual_results=qual_str,
             summary=previous_score.total_summary,
@@ -78,22 +78,22 @@ class SupervisorAgent:
         Raises:
             Exception: LLM 호출 실패 또는 응답 형식 오류 시 (호출자에서 retry 가능)
         """
-        goal = extracted_data.get("goal", "")
+        purpose = extracted_data.get("purpose", "")
         input_data = extracted_data.get("input_data", "")
         task = extracted_data.get("task", "")
         output = extracted_data.get("output", "")
-        completion = extracted_data.get("completion", "")
+        checklist = extracted_data.get("checklist", "")
 
         quant_str = "\n".join([f"- {r.criterion_name}: {r.pass_fail} ({r.reasoning})" for r in score.quantitative_results])
         qual_str = "\n".join([f"- {r.criterion_name}: {r.pass_fail} ({r.reasoning})" for r in score.qualitative_results])
 
         prompt = REVIEW_PROMPT.format(
             key=key,
-            goal=goal,
+            purpose=purpose,
             input_data=input_data,
             task=task,
             output=output,
-            completion=completion,
+            checklist=checklist,
             quant_results=quant_str,
             qual_results=qual_str,
             summary=score.total_summary,

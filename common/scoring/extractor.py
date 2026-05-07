@@ -18,9 +18,9 @@ class SillogDataExtractor:
 
         description = data.get("description", {})
         outputs = data.get("outputs", [])
-        checklist = data.get("checklist", [])
+        checklist_items = data.get("checklist", [])
 
-        goal = description.get("purpose", "") if isinstance(description, dict) else ""
+        purpose = description.get("purpose", "") if isinstance(description, dict) else ""
 
         input_data_info = []
         input_data_list = description.get("input_data", []) if isinstance(description, dict) else []
@@ -96,12 +96,12 @@ class SillogDataExtractor:
                 output_info.append(" | ".join(output_parts))
 
         output_combined = " | ".join(output_info)
-        completion_combined = " | ".join([str(c) for c in checklist]) if checklist else ""
+        checklist_combined = " | ".join([str(c) for c in checklist_items]) if checklist_items else ""
 
         return {
-            "goal": goal,
+            "purpose": purpose,
             "input_data": input_data_combined,
             "task": task_combined,
             "output": output_combined,
-            "completion": completion_combined
+            "checklist": checklist_combined
         }
