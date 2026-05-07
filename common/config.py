@@ -31,6 +31,11 @@ JIRA_VERIFY_SSL = os.environ.get("JIRA_VERIFY_SSL", "false").lower() in ("1", "t
 # ── 운영 ────────────────────────────────────────────
 MIGRATION_USER = os.environ.get("MIGRATION_USER", "migration")
 
+# ── 셧다운 임계값 ───────────────────────────────────
+# 한 issue가 retry 3회 후에도 실패한 게 누적 N건이면 task 자체 종료.
+# (LLM 서버 다운으로 추정, 무의미한 호출 누적 방지)
+SHUTDOWN_THRESHOLD = int(os.environ.get("SHUTDOWN_THRESHOLD", "10"))
+
 # ── LLM 풀 ─────────────────────────────────────────
 LLM_POOL_SIZE = int(os.environ.get("LLM_POOL_SIZE", "5"))
 

@@ -1,6 +1,6 @@
 # 05. 현재 상태 / TODO
 
-기준일: 2026-05-06. 권위 있는 진행 SOT는 루트 `REFACTORING.md`. 이 문서는 사람이 읽기 좋은 요약 + 운영상 미연동 항목.
+기준일: 2026-05-07. 권위 있는 진행 SOT는 루트 `REFACTORING.md`. 이 문서는 사람이 읽기 좋은 요약 + 운영상 미연동 항목.
 
 ## 코드 베이스 상태
 
@@ -27,24 +27,24 @@
 | **R-2. task entry / common 인터페이스 분리** | ✅ (2026-05-06) |
 | **R-3. 하드코딩 상수 중앙화 (constants.py + db/schema.py)** | ✅ (2026-05-06) |
 | **R-4. rule item DB SOT 통합 + Quantitative registry 패턴** | ✅ (2026-05-06) |
+| **R-5. API 셧다운 + 재개 + DB 직접 적재 (로컬 결과 파일 제거)** | ✅ (2026-05-07) |
 
-### R-1: 디렉토리 재편성
+### R-5: API 셧다운 + 재개 + DB SOT
 
-- 루트 `__init__.py` 삭제 (루트가 더 이상 패키지 아님)
-- 모든 상대 import → 절대 import (`from common.config import ...`)
-- 디렉토리: `common/`, `parse/`, `score/`, `save/` (top-level packages)
-- task: `parse fetch_jira`, `parse parse_description`, `score score_issues`, `save upload_parsed`, `save upload_results`, `save migrate_meta`, `save reset_results`
-- dispatcher `run_task.py`: `sys.argv = [module_path] + sys.argv[3:]` 보정으로 task가 표준 argparse 사용 가능
-- `main.py` 삭제 (run_task.py + 3개 task로 분할)
-- `parser/`, `scorer/` 디렉토리 → `parse/`, `score/`로 이름 변경
+- DDL 변경: `eval_task_parsed`, `eval_task_result`에 `status VARCHAR2(20)`, `failed_reason VARCHAR2(4000)` 컬럼 추가 (사내 DBA 적용 완료)
+- 새 패턴: placeholder INSERT (status='PENDING') → LLM 호출 → 성공 populate (status='DONE') / 실패 mark_failed (status='FAILED' + failed_reason)
+- 재개: 같은 `--run-id`로 재호출 시 DB의 status='DONE' row를 skip
+- 셧다운: 한 issue retry 3회 후 실패가 누적 SHUTDOWN_THRESHOLD(default 10)에 도달하면 sys.exit(2)
+- 로컬 결과 파일 모두 제거 (parsed/, _meta.json, items/, iteration/, _parse_errors_*, _load_errors_*) — 유일한 로컬 파일은 `jira_issues.pkl`
+- 새 cleanup task (`cleanup cleanup_files`): jira_issues.pkl + 옛 디렉토리 정리
 
 ## 미연동 / 운영 갭
 
-- **`.env`** 작성 필요 (커밋 금지). 최소: `PLATFORM`, `DTGPT_*` 또는 `DS_LLM_*`, `FILTER_ID`, `JIRA_*`, `ORACLE_*`, `SCORER_STORAGE_DIR`
-- **프롬프트** (`EVALUATE_PROMPT`/`REFINE_PROMPT`/`REVIEW_PROMPT`/`PARSING_TEMPLATE`) — `common/config.py`에 placeholder만, 실제 템플릿은 로컬에서 채워야 함
-- **DDL** — `eval_task_parsed*` / `eval_task_result*` / `sillog_tasks_attr` / `eval_task_rule_item` 스키마는 본 레포 외부. 운영 DB 적용 선결 필요
-- **`STORAGE_DIR` 기본값**이 Windows 경로(`C:\Users\sh0913.park\...`)로 박혀 있음 — 리눅스에서 돌리려면 env override 필수
-- **Jira `verify_ssl=False`** 하드코딩 — 환경 변경이 필요하면 코드 수정
+- **`.env`** 작성 필요 (커밋 금지). 최소: `PLATFORM`, `DTGPT_*` 또는 `DS_LLM_*`, `FILTER_ID`, `JIRA_*`, `ORACLE_*`, `SCORER_STORAGE_DIR`, `SHUTDOWN_THRESHOLD`(선택)
+- **프롬프트** (`EVALUATE_PROMPT`/`REFINE_PROMPT`/`REVIEW_PROMPT`/`PARSING_TEMPLATE`) — `common/config.py`에 placeholder만
+- **DDL R-5**: `ALTER TABLE eval_task_parsed/result ADD status/failed_reason` + 인덱스 운영 DB 적용 완료 가정
+- **`STORAGE_DIR` 기본값**이 Windows 경로 — 리눅스에서 돌리려면 env override 필수
+- **Jira `verify_ssl=False`** — `JIRA_VERIFY_SSL` env로 제어
 
 ## 다음 작업 추천
 

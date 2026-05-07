@@ -68,6 +68,18 @@ class YN:
     NO = "N"
 
 
+class Status:
+    """`eval_task_parsed.status` / `eval_task_result.status` 값.
+
+    - `PENDING`: placeholder만 INSERT됨, 결과 미반영. 다음 실행에서 재처리.
+    - `DONE`: 자식 테이블 INSERT까지 commit 완료. terminal.
+    - `FAILED`: retry 끝까지 실패 → failed_reason 컬럼에 원인 기록. terminal.
+    """
+    PENDING = "PENDING"
+    DONE = "DONE"
+    FAILED = "FAILED"
+
+
 # ── 매직 ID ────────────────────────────────────────
 
 JIRA_KEY_ATTR_MASTER_ID = 17
@@ -93,12 +105,6 @@ ITERATION_SUBDIR = "iteration"
 
 META_FILENAME = "_meta.json"
 """평가 메타 파일명."""
-
-LOAD_ERROR_PREFIX = "_load_errors_"
-"""save upload_parsed의 실패 로그 파일 prefix (`{prefix}{ts}.json`)."""
-
-PARSE_ERROR_PREFIX = "_parse_errors_"
-"""parse parse_description의 실패 로그 파일 prefix."""
 
 BACKUP_SUFFIX = ".bak"
 """save migrate_meta의 백업 파일 suffix."""

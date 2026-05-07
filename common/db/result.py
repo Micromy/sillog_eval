@@ -30,12 +30,254 @@ from common.constants import (
     META_FILENAME,
     PassFail,
     SCORE_MAP,
+    Status,
     SupervisorStatus,
     YN,
 )
 from common.db.rules import load_rule_item_id_map
 from common.db.schema import RESULT_COLUMN_BYTES
 from common.text import truncate
+
+
+# ── 새 패턴: placeholder / populate / mark_failed / get_done ─────
+
+def insert_result_placeholder(
+    cur,
+    task_id: int,
+    eval_rule_set_id: int,
+    eval_seq: int,
+    model_name: str,
+    created_by: Optional[str] = None,
+) -> int:
+    """eval_task_result에 placeholder 1행 INSERT (status='PENDING'). task_eval_id 반환.
+
+    `score score_issues` 평가 시작 시 호출. 평가 끝나면 populate_result로 본문 채움.
+    """
+    import oracledb
+
+    user = created_by or MIGRATION_USER
+    now = datetime.now()
+    task_eval_id_var = cur.var(oracledb.NUMBER)
+    cur.execute(
+        """
+        INSERT INTO eval_task_result (
+            task_id, eval_rule_set_id, eval_seq,
+            model_name, is_latest,
+            evaluated_at, evaluated_by,
+            created_at, created_by, updated_at, updated_by,
+            status
+        ) VALUES (
+            :task_id, :rsid, :seq,
+            :model_name, :is_latest,
+            :now, :user,
+            :now, :user, :now, :user,
+            :status
+        )
+        RETURNING task_eval_id INTO :out_id
+        """,
+        task_id=task_id,
+        rsid=eval_rule_set_id,
+        seq=eval_seq,
+        model_name=truncate(model_name, RESULT_COLUMN_BYTES["model_name"]),
+        is_latest=YN.YES,
+        now=now,
+        user=user,
+        status=Status.PENDING,
+        out_id=task_eval_id_var,
+    )
+    return int(task_eval_id_var.getvalue()[0])
+
+
+def populate_result(
+    cur,
+    task_eval_id: int,
+    summary_struct: dict,
+    total_summary: str,
+    items: List[dict],
+    review_history: List[dict],
+    rule_item_map: Dict[str, int],
+    created_by: Optional[str] = None,
+) -> Tuple[int, List[str]]:
+    """placeholder를 채워 status='DONE'으로 마무리.
+
+    1. eval_task_result UPDATE — total_score, grade_code, eval_count, eval_summary, status=DONE
+    2. eval_task_result_item INSERT (per item)
+    3. eval_task_result_review INSERT (per round feedback)
+    4. eval_task_result_item_review INSERT (per supervisor issue)
+
+    호출자가 `with db.cursor() as cur:` 안에서 호출 (한 트랜잭션).
+
+    Returns:
+        (item_insert_count, unmapped_criterion_names)
+    """
+    user = created_by or MIGRATION_USER
+    now = datetime.now()
+    supervisor = summary_struct.get("supervisor") or {}
+
+    # 1. 본문 UPDATE + status DONE
+    cur.execute(
+        """
+        UPDATE eval_task_result
+        SET total_score = :total_score,
+            grade_code = :grade_code,
+            eval_count = :eval_count,
+            eval_summary = :eval_summary,
+            updated_at = :now,
+            updated_by = :user,
+            status = :status,
+            failed_reason = NULL
+        WHERE task_eval_id = :tid
+        """,
+        tid=task_eval_id,
+        total_score=summary_struct.get("final_score"),
+        grade_code=_grade_from_status(supervisor.get("status")),
+        eval_count=summary_struct.get("rounds_used"),
+        eval_summary=truncate(total_summary, RESULT_COLUMN_BYTES["eval_summary"]),
+        now=now,
+        user=user,
+        status=Status.DONE,
+    )
+
+    # 2. items
+    item_count, unmapped_items = _insert_items_inline(
+        cur, task_eval_id, items, rule_item_map, now, user,
+    )
+
+    # 3. round reviews
+    for entry in review_history:
+        cur.execute(
+            """
+            INSERT INTO eval_task_result_review (
+                task_eval_result_id, feedback, eval_seq, time_elapsed,
+                created_at, created_by
+            ) VALUES (
+                :tid, :feedback, :seq, :elapsed,
+                :now, :user
+            )
+            """,
+            tid=task_eval_id,
+            feedback=truncate(entry.get("feedback"), RESULT_COLUMN_BYTES["feedback"]),
+            seq=entry.get("round"),
+            elapsed=None,
+            now=now,
+            user=user,
+        )
+
+    # 4. item reviews
+    for entry in review_history:
+        for issue in (entry.get("issues") or []):
+            criterion = issue.get("criterion")
+            eval_rule_item_id = rule_item_map.get(criterion)
+            if eval_rule_item_id is None:
+                unmapped_items.append(criterion)
+                continue
+            cur.execute(
+                """
+                INSERT INTO eval_task_result_item_review (
+                    task_eval_id, eval_rule_item_id,
+                    review, suggestion,
+                    created_at, created_by
+                ) VALUES (
+                    :tid, :rid, :review, :suggestion,
+                    :now, :user
+                )
+                """,
+                tid=task_eval_id,
+                rid=eval_rule_item_id,
+                review=truncate(issue.get("reason"), RESULT_COLUMN_BYTES["review"]),
+                suggestion=truncate(issue.get("suggestion"), RESULT_COLUMN_BYTES["suggestion"]),
+                now=now,
+                user=user,
+            )
+
+    return item_count, unmapped_items
+
+
+def _insert_items_inline(
+    cur,
+    task_eval_id: int,
+    items: List[dict],
+    rule_item_map: Dict[str, int],
+    now: datetime,
+    user: str,
+) -> Tuple[int, List[str]]:
+    """populate_result 내부에서 사용. items는 in-memory dict 리스트."""
+    success = 0
+    unmapped = []
+
+    for item in items:
+        criterion_name = item.get("criterion_name")
+        eval_rule_item_id = rule_item_map.get(criterion_name)
+        if eval_rule_item_id is None:
+            unmapped.append(criterion_name)
+            continue
+
+        pass_fail = item.get("pass_fail", PassFail.FAIL)
+        raw_score = _score_from_pass_fail(pass_fail)
+
+        cur.execute(
+            """
+            INSERT INTO eval_task_result_item (
+                task_eval_id, eval_rule_item_id,
+                raw_score, weighted_score, pass_yn, comment_summary,
+                created_at, created_by, updated_at, updated_by
+            ) VALUES (
+                :tid, :rid,
+                :raw_sc, :weighted, :pass_yn, :cmt,
+                :now, :user, :now, :user
+            )
+            """,
+            tid=task_eval_id,
+            rid=eval_rule_item_id,
+            raw_sc=raw_score,
+            weighted=raw_score,
+            pass_yn=_pass_yn(pass_fail),
+            cmt=truncate(item.get("reasoning"), RESULT_COLUMN_BYTES["comment_summary"]),
+            now=now,
+            user=user,
+        )
+        success += 1
+
+    return success, unmapped
+
+
+def mark_result_failed(task_eval_id: int, reason: str) -> None:
+    """status='FAILED' + failed_reason 기록. 별도 트랜잭션."""
+    db.execute(
+        """
+        UPDATE eval_task_result
+        SET status = :status,
+            failed_reason = :reason,
+            updated_at = :now,
+            updated_by = :user
+        WHERE task_eval_id = :tid
+        """,
+        tid=task_eval_id,
+        status=Status.FAILED,
+        reason=truncate(reason, RESULT_COLUMN_BYTES["failed_reason"]),
+        now=datetime.now(),
+        user=MIGRATION_USER,
+    )
+
+
+def get_done_task_ids(eval_rule_set_id: int, eval_seq: int = 1) -> set[int]:
+    """status='DONE'인 task_id 집합 (재개 시 skip 대상).
+
+    score score_issues task가 다시 호출됐을 때 이미 평가 완료된 task는 건너뛰기 위함.
+    """
+    rows = db.select(
+        """
+        SELECT task_id
+        FROM eval_task_result
+        WHERE eval_rule_set_id = :rsid
+          AND eval_seq = :seq
+          AND status = :status
+        """,
+        rsid=eval_rule_set_id,
+        seq=eval_seq,
+        status=Status.DONE,
+    )
+    return {r["task_id"] for r in rows}
 
 
 # ── task_id 조회 ──────────────────────────────────

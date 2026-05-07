@@ -1,30 +1,42 @@
 # -*- coding: utf-8 -*-
 """
 eval_task_parsed 계열 테이블 적재 모듈.
-SillogData(Pydantic) → Oracle DB 적재.
 
-[적재 순서]
-1. eval_task_parsed       (루트)  → RETURNING parsed_id
-2. eval_task_parsed_input (자식)  → RETURNING input_id  (manager FK용)
-3. eval_task_parsed_output(자식)  → RETURNING output_id (manager FK용)
-4. eval_task_parsed_check (자식)
-5. eval_task_parsed_manager(자식) → parent_type='INPUT' | 'OUTPUT_RECEIVER'
+[적재 패턴]
+1. `insert_parsed_placeholder(cur, run_id, source_issue_key, parser_version)`
+   → status='PENDING' row만 INSERT (raw_json/자식 NULL). parsed_id 반환.
+2. LLM 호출 등 외부 작업 수행 (DB connection 안 잡고)
+3. 성공 시 `populate_parsed(cur, parsed_id, sillog_data)`
+   → eval_task_parsed UPDATE (raw_json + 메타) + 자식 4개 INSERT + status='DONE'
+   (한 트랜잭션)
+4. 실패 시 `mark_parsed_failed(parsed_id, reason)`
+   → status='FAILED' + failed_reason 컬럼 기록
 
-[NULL 처리 정책]
-- 필수 컬럼(run_id, source_issue_key 등): 누락 시 에러
-- 선택 컬럼(file_name, file_path, role 등): 누락/빈문자열/None → NULL로 INSERT
+[자식 테이블 적재 순서]
+- eval_task_parsed_input  (RETURNING input_id  → manager FK)
+- eval_task_parsed_output (RETURNING output_id → manager FK)
+- eval_task_parsed_check
+- eval_task_parsed_manager (parent_type='INPUT' | 'OUTPUT')
+
+[NULL 처리]
+- 필수 인자(run_id, source_issue_key, parser_version): 누락 시 ValueError
+- 선택 필드(file_name, role 등): 누락/빈문자열/None → NULL INSERT
+
+[재개]
+`get_done_keys(run_id)`: status='DONE'인 source_issue_key 집합. parse_description 시작 시
+이걸로 skip 대상을 계산.
 """
 
 import json
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Set
 
 from common import db
 from common.constants import (
     JIRA_KEY_ATTR_MASTER_ID,
-    LOAD_ERROR_PREFIX,
     ORACLE_IN_CHUNK_SIZE,
     ParentType,
+    Status,
 )
 from common.convert import to_raw_dict
 from common.db.schema import (
@@ -36,154 +48,194 @@ from common.db.schema import (
 from common.text import truncate, clob_or_none, safe_dict, safe_list
 
 
-# ── 단일 이슈 적재 ──────────────────────────────────────────────
+# ── placeholder / populate / mark_failed ────────────────────────
+
+def insert_parsed_placeholder(
+    cur,
+    run_id: str,
+    source_issue_key: str,
+    parser_version: str,
+) -> int:
+    """eval_task_parsed에 placeholder 1행 INSERT (status='PENDING').
+
+    raw_json/메타 컬럼은 NULL. 자식 테이블은 아직 INSERT하지 않음.
+
+    Returns:
+        생성된 parsed_id
+
+    Raises:
+        ValueError: 필수 인자 누락
+    """
+    if not run_id:
+        raise ValueError("run_id가 비어있음")
+    if not source_issue_key:
+        raise ValueError("source_issue_key가 비어있음")
+    if not parser_version:
+        raise ValueError("parser_version이 비어있음")
+
+    import oracledb
+    parsed_id_var = cur.var(oracledb.NUMBER)
+    cur.execute(
+        """
+        INSERT INTO eval_task_parsed (
+            run_id,
+            task_id,
+            source_issue_key,
+            parsed_at,
+            parser_version,
+            status
+        ) VALUES (
+            :run_id,
+            (SELECT task_id
+             FROM sillog_tasks_attr
+             WHERE attr_master_id=:master_id AND attr_value=:issue_key),
+            :issue_key,
+            :parsed_at,
+            :parser_ver,
+            :status
+        )
+        RETURNING parsed_id INTO :out_id
+        """,
+        run_id=run_id,
+        master_id=JIRA_KEY_ATTR_MASTER_ID,
+        issue_key=source_issue_key,
+        parsed_at=datetime.now(),
+        parser_ver=parser_version,
+        status=Status.PENDING,
+        out_id=parsed_id_var,
+    )
+    return int(parsed_id_var.getvalue()[0])
+
+
+def populate_parsed(cur, parsed_id: int, sillog_data: Any) -> None:
+    """placeholder row를 채워 status='DONE'으로 마무리.
+
+    eval_task_parsed UPDATE (raw_json + 메타) + 자식 4개 INSERT.
+    호출자가 `with db.cursor() as cur:` 안에서 호출 (한 트랜잭션 commit).
+    """
+    if sillog_data is None:
+        raise ValueError("sillog_data가 None")
+
+    data = to_raw_dict(sillog_data)
+    raw_json = json.dumps(data, ensure_ascii=False, indent=2)
+    desc = safe_dict(data.get("description"))
+    tm = safe_dict(desc.get("task_manager"))
+
+    # 1. 본문 + 메타 UPDATE (status DONE)
+    cur.execute(
+        """
+        UPDATE eval_task_parsed
+        SET raw_json = :raw_json,
+            purpose = :purpose,
+            task_execution_method = :exec_method,
+            tool = :tool,
+            task_manager_role = :tm_role,
+            task_manager_role_type = :tm_role_type,
+            task_manager_job_category = :tm_job_cat,
+            status = :status,
+            failed_reason = NULL
+        WHERE parsed_id = :pid
+        """,
+        pid=parsed_id,
+        raw_json=raw_json,
+        purpose=truncate(desc.get("purpose"), PARSED_COLUMN_BYTES["purpose"]),
+        exec_method=truncate(desc.get("task_execution_method"), PARSED_COLUMN_BYTES["task_execution_method"]),
+        tool=truncate(desc.get("tool"), PARSED_COLUMN_BYTES["tool"]),
+        tm_role=truncate(tm.get("role"), PARSED_COLUMN_BYTES["task_manager_role"]),
+        tm_role_type=truncate(tm.get("role_type"), PARSED_COLUMN_BYTES["task_manager_role_type"]),
+        tm_job_cat=truncate(tm.get("job_category"), PARSED_COLUMN_BYTES["task_manager_job_category"]),
+        status=Status.DONE,
+    )
+
+    # 2. input INSERT + 그 input의 managers
+    for seq, inp in enumerate(safe_list(desc.get("input_data"))):
+        inp = safe_dict(inp)
+        input_id = _insert_input(cur, parsed_id, seq, inp)
+        for mgr_seq, mgr in enumerate(safe_list(inp.get("managers"))):
+            _insert_manager(
+                cur, parsed_id,
+                parent_type=ParentType.INPUT,
+                parent_id=input_id,
+                seq=mgr_seq,
+                manager=safe_dict(mgr),
+            )
+
+    # 3. output INSERT + 그 output의 receivers
+    for seq, out in enumerate(safe_list(data.get("outputs"))):
+        out = safe_dict(out)
+        output_id = _insert_output(cur, parsed_id, seq, out)
+        for rcv_seq, rcv in enumerate(safe_list(out.get("receivers"))):
+            _insert_manager(
+                cur, parsed_id,
+                parent_type=ParentType.OUTPUT,
+                parent_id=output_id,
+                seq=rcv_seq,
+                manager=safe_dict(rcv),
+            )
+
+    # 4. checklist INSERT
+    for seq, item_text in enumerate(safe_list(data.get("checklist"))):
+        _insert_check(cur, parsed_id, seq, item_text)
+
+
+def mark_parsed_failed(parsed_id: int, reason: str) -> None:
+    """status='FAILED' + failed_reason 기록. 별도 트랜잭션."""
+    db.execute(
+        """
+        UPDATE eval_task_parsed
+        SET status = :status,
+            failed_reason = :reason
+        WHERE parsed_id = :pid
+        """,
+        pid=parsed_id,
+        status=Status.FAILED,
+        reason=truncate(reason, PARSED_COLUMN_BYTES["failed_reason"]),
+    )
+
+
+# ── 재개 (resume) ───────────────────────────────────────────────
+
+def get_done_keys(run_id: str) -> Set[str]:
+    """status='DONE'인 source_issue_key 집합 (재개 시 skip 대상)."""
+    rows = db.select(
+        """
+        SELECT source_issue_key
+        FROM eval_task_parsed
+        WHERE run_id = :rid AND status = :status
+        """,
+        rid=run_id,
+        status=Status.DONE,
+    )
+    return {r["source_issue_key"] for r in rows}
+
+
+# ── 후행 호환 / backfill 용 ──────────────────────────────────────
 
 def save_parsed(
     run_id: str,
     source_issue_key: str,
     sillog_data: Any,
     parser_version: str,
-    task_id: Optional[int] = None,
+    task_id: Optional[int] = None,  # 사용 안 함 (서브쿼리로 매핑) — 시그니처 호환용
 ) -> int:
-    """SillogData 하나를 eval_task_parsed 계열 테이블에 적재.
+    """[backfill용] placeholder + populate를 한 트랜잭션에 묶어 호출.
 
-    필수 인자(run_id, source_issue_key, sillog_data, parser_version)가 비어있으면 에러.
-    선택 필드(file_name, role 등)가 누락된 경우는 NULL로 INSERT.
-
-    Args:
-        run_id: Airflow run_id (필수)
-        source_issue_key: Jira 이슈 키 (예: PROJ-1234) (필수)
-        sillog_data: SillogData Pydantic 인스턴스 또는 dict (필수)
-        parser_version: 파서 버전 문자열 (필수)
-        task_id: sillog_tasks.task_id (있으면)
-
-    Returns:
-        생성된 parsed_id
-
-    Raises:
-        ValueError: 필수 인자 누락 시
-        TypeError: sillog_data 타입 불일치 시
-        Exception: DB 오류 시 rollback 후 raise
+    `save upload_parsed` task에서 로컬 parsed JSON → DB 적재 시 사용.
+    평소 파이프라인(parse_description)은 placeholder/populate를 분리 호출.
     """
-    # 필수 인자 검증
-    if not run_id:
-        raise ValueError("run_id가 비어있음")
-    if not source_issue_key:
-        raise ValueError("source_issue_key가 비어있음")
     if sillog_data is None:
         raise ValueError("sillog_data가 None")
-    if not parser_version:
-        raise ValueError("parser_version이 비어있음")
-
-    data = to_raw_dict(sillog_data)
-    raw_json = json.dumps(data, ensure_ascii=False, indent=2)
-    desc = safe_dict(data.get("description"))
-
-    # task_manager 평탄화 (없거나 dict 아니면 빈 dict)
-    tm = safe_dict(desc.get("task_manager"))
 
     with db.cursor() as cur:
-        # ── 1. 루트 INSERT ──
-        parsed_id = _insert_parsed(
-            cur,
-            run_id=run_id,
-            source_issue_key=source_issue_key,
-            raw_json=raw_json,
-            purpose=desc.get("purpose"),
-            task_execution_method=desc.get("task_execution_method"),
-            tool=desc.get("tool"),
-            tm_role=tm.get("role"),
-            tm_role_type=tm.get("role_type"),
-            tm_job_category=tm.get("job_category"),
-            parser_version=parser_version,
-            task_id=task_id,
-        )
-
-        # ── 2. input_data INSERT ──
-        for seq, inp in enumerate(safe_list(desc.get("input_data"))):
-            inp = safe_dict(inp)
-            input_id = _insert_input(cur, parsed_id, seq, inp)
-
-            # input의 managers
-            for mgr_seq, mgr in enumerate(safe_list(inp.get("managers"))):
-                _insert_manager(
-                    cur, parsed_id,
-                    parent_type=ParentType.INPUT,
-                    parent_id=input_id,
-                    seq=mgr_seq,
-                    manager=safe_dict(mgr),
-                )
-
-        # ── 3. outputs INSERT ──
-        for seq, out in enumerate(safe_list(data.get("outputs"))):
-            out = safe_dict(out)
-            output_id = _insert_output(cur, parsed_id, seq, out)
-
-            # output의 receivers
-            for rcv_seq, rcv in enumerate(safe_list(out.get("receivers"))):
-                _insert_manager(
-                    cur, parsed_id,
-                    parent_type=ParentType.OUTPUT,
-                    parent_id=output_id,
-                    seq=rcv_seq,
-                    manager=safe_dict(rcv),
-                )
-
-        # ── 4. checklist INSERT ──
-        for seq, item_text in enumerate(safe_list(data.get("checklist"))):
-            _insert_check(cur, parsed_id, seq, item_text)
-
-    return parsed_id
-
-
-# ── 배치 적재 ────────────────────────────────────────────────
-
-def save_parsed_batch(
-    items: list[dict],
-    run_id: str,
-    parser_version: str,
-) -> list[dict]:
-    """여러 이슈 일괄 적재. 건별 트랜잭션 (한 건 실패해도 나머지 진행).
-
-    Args:
-        items: [{"source_issue_key": str, "sillog_data": ..., "task_id": int|None}, ...]
-        run_id: Airflow run_id
-        parser_version: 파서 버전
-
-    Returns:
-        [{"source_issue_key": str, "parsed_id": int|None, "error": str|None}, ...]
-    """
-    results = []
-
-    for item in items:
-        key = item["source_issue_key"]
-        try:
-            parsed_id = save_parsed(
-                run_id=run_id,
-                source_issue_key=key,
-                sillog_data=item["sillog_data"],
-                parser_version=parser_version,
-                task_id=item.get("task_id"),
-            )
-            results.append({"source_issue_key": key, "parsed_id": parsed_id, "error": None})
-            print(f"  [적재 OK] {key} → parsed_id={parsed_id}")
-        except Exception as e:
-            results.append({"source_issue_key": key, "parsed_id": None, "error": str(e)})
-            print(f"  [적재 FAIL] {key}: {e}")
-
-    success = sum(1 for r in results if r["error"] is None)
-    print(f"[적재 완료] {success}/{len(results)} 성공")
-    return results
+        parsed_id = insert_parsed_placeholder(cur, run_id, source_issue_key, parser_version)
+        populate_parsed(cur, parsed_id, sillog_data)
+        return parsed_id
 
 
 # ── 조회 헬퍼 ────────────────────────────────────────────────
 
 def get_latest_parsed(source_issue_key: str) -> Optional[dict]:
-    """특정 이슈의 최신 파싱 결과 조회.
-
-    Returns:
-        eval_task_parsed 행 dict 또는 None
-    """
+    """특정 이슈의 최신 파싱 결과 조회."""
     return db.fetch(
         """
         SELECT *
@@ -200,7 +252,7 @@ def get_parsed_by_run(run_id: str) -> list[dict]:
     """특정 run의 모든 파싱 결과 조회."""
     return db.select(
         """
-        SELECT parsed_id, source_issue_key, purpose, tool, parsed_at
+        SELECT parsed_id, source_issue_key, purpose, tool, parsed_at, status
         FROM eval_task_parsed
         WHERE run_id = :rid
         ORDER BY parsed_id
@@ -218,20 +270,13 @@ def get_parsed_full(parsed_id: int) -> Optional[dict]:
 
 
 def get_existing_hashes(issue_keys: list[str]) -> dict[str, str]:
-    """이슈 키 목록에 대해 최신 파싱의 raw_json 해시를 반환.
-
-    diff_and_filter에서 변경 감지에 사용.
-
-    Returns:
-        {source_issue_key: raw_json_hash}
-    """
+    """이슈 키 목록 → 최신 파싱의 raw_json 해시. 변경 감지용."""
     if not issue_keys:
         return {}
 
-    # Oracle IN절 최대 1000개 제한 → 청크 분할
     result = {}
     for chunk_start in range(0, len(issue_keys), ORACLE_IN_CHUNK_SIZE):
-        chunk = issue_keys[chunk_start : chunk_start + ORACLE_IN_CHUNK_SIZE]
+        chunk = issue_keys[chunk_start: chunk_start + ORACLE_IN_CHUNK_SIZE]
         placeholders = ", ".join(f":k{i}" for i in range(len(chunk)))
         params = {f"k{i}": key for i, key in enumerate(chunk)}
 
@@ -247,6 +292,7 @@ def get_existing_hashes(issue_keys: list[str]) -> dict[str, str]:
                        ) AS rn
                 FROM eval_task_parsed
                 WHERE source_issue_key IN ({placeholders})
+                  AND status = '{Status.DONE}'
             )
             WHERE rn = 1
             """,
@@ -258,73 +304,7 @@ def get_existing_hashes(issue_keys: list[str]) -> dict[str, str]:
     return result
 
 
-# ── private: 테이블별 INSERT ─────────────────────────────────
-
-def _insert_parsed(
-    cur,
-    run_id: str,
-    source_issue_key: str,
-    raw_json: str,
-    purpose: Optional[str],
-    task_execution_method: Optional[str],
-    tool: Optional[str],
-    tm_role: Optional[str],
-    tm_role_type: Optional[str],
-    tm_job_category: Optional[str],
-    parser_version: str,
-    task_id: Optional[int] = None,
-) -> int:
-    """eval_task_parsed INSERT → parsed_id 반환."""
-    import oracledb
-
-    parsed_id_var = cur.var(oracledb.NUMBER)
-    cur.execute(
-        """
-        INSERT INTO eval_task_parsed (
-            run_id,
-            task_id,
-            raw_json,
-            purpose,
-            task_execution_method,
-            tool,
-            task_manager_role,
-            task_manager_role_type,
-            task_manager_job_category,
-            parsed_at,
-            parser_version
-        ) VALUES (
-            :run_id,
-            (SELECT task_id
-             FROM sillog_tasks_attr
-             WHERE attr_master_id=:master_id and attr_value=:issue_key),
-            :raw_json,
-            :purpose,
-            :exec_method,
-            :tool,
-            :tm_role,
-            :tm_role_type,
-            :tm_job_cat,
-            :parsed_at,
-            :parser_ver
-        )
-        RETURNING parsed_id INTO :out_id
-        """,
-        run_id=run_id,
-        master_id=JIRA_KEY_ATTR_MASTER_ID,
-        issue_key=source_issue_key,
-        raw_json=raw_json,
-        purpose=truncate(purpose, PARSED_COLUMN_BYTES["purpose"]),
-        exec_method=truncate(task_execution_method, PARSED_COLUMN_BYTES["task_execution_method"]),
-        tool=truncate(tool, PARSED_COLUMN_BYTES["tool"]),
-        tm_role=truncate(tm_role, PARSED_COLUMN_BYTES["task_manager_role"]),
-        tm_role_type=truncate(tm_role_type, PARSED_COLUMN_BYTES["task_manager_role_type"]),
-        tm_job_cat=truncate(tm_job_category, PARSED_COLUMN_BYTES["task_manager_job_category"]),
-        parsed_at=datetime.now(),
-        parser_ver=parser_version,
-        out_id=parsed_id_var,
-    )
-    return int(parsed_id_var.getvalue()[0])
-
+# ── private: 자식 테이블 INSERT ──────────────────────────────────
 
 def _insert_input(cur, parsed_id: int, seq: int, inp: dict) -> int:
     """eval_task_parsed_input INSERT → input_id 반환."""
@@ -334,20 +314,20 @@ def _insert_input(cur, parsed_id: int, seq: int, inp: dict) -> int:
     cur.execute(
         """
         INSERT INTO eval_task_parsed_input (
-            parsed_id, 
-            seq, 
-            file_name, 
+            parsed_id,
+            seq,
+            file_name,
             file_format,
-            file_path, 
-            description, 
+            file_path,
+            description,
             task_link
         ) VALUES (
-            :pid, 
-            :seq, 
-            :fname, 
+            :pid,
+            :seq,
+            :fname,
             :fformat,
-            :fpath, 
-            :descr, 
+            :fpath,
+            :descr,
             :tlink
         )
         RETURNING input_id INTO :out_id
@@ -372,16 +352,16 @@ def _insert_output(cur, parsed_id: int, seq: int, out: dict) -> int:
     cur.execute(
         """
         INSERT INTO eval_task_parsed_output (
-            parsed_id, 
-            seq, 
-            file_name, 
-            file_format, 
+            parsed_id,
+            seq,
+            file_name,
+            file_format,
             file_path
         ) VALUES (
-            :pid, 
-            :seq, 
-            :fname, 
-            :fformat, 
+            :pid,
+            :seq,
+            :fname,
+            :fformat,
             :fpath
         )
         RETURNING output_id INTO :out_id
@@ -401,12 +381,12 @@ def _insert_check(cur, parsed_id: int, seq: int, item_text) -> None:
     cur.execute(
         """
         INSERT INTO eval_task_parsed_check (
-            parsed_id, 
-            seq, 
+            parsed_id,
+            seq,
             item_text
         ) VALUES (
-            :pid, 
-            :seq, 
+            :pid,
+            :seq,
             :item
         )
         """,
@@ -428,20 +408,20 @@ def _insert_manager(
     cur.execute(
         """
         INSERT INTO eval_task_parsed_manager (
-            parsed_id, 
-            parent_type, 
-            parent_id, 
+            parsed_id,
+            parent_type,
+            parent_id,
             seq,
-            role, 
-            role_type, 
+            role,
+            role_type,
             job_category
         ) VALUES (
-            :pid, 
-            :ptype, 
-            :parent_id, 
+            :pid,
+            :ptype,
+            :parent_id,
             :seq,
-            :role, 
-            :rtype, 
+            :role,
+            :rtype,
             :jcat
         )
         """,
@@ -455,7 +435,7 @@ def _insert_manager(
     )
 
 
-# ── 일괄 업로드 (디렉토리 → DB) ────────────────────────────────
+# ── 일괄 업로드 (backfill: 디렉토리 → DB) ────────────────────────
 
 def _discover_files(parsed_dir):
     """디렉터리에서 {key}.json 파일 목록 수집 (에러 로그 제외)."""
@@ -497,9 +477,10 @@ def upload(
     parser_version: str,
     dry_run: bool = False,
 ) -> tuple[int, int, int]:
-    """parsed/*.json 일괄 적재.
+    """parsed/*.json 일괄 적재 (backfill용).
 
-    UK 위반은 skip, 그 외 실패는 _load_errors_<ts>.json에 누적 저장.
+    UK 위반은 skip, 그 외 실패는 콘솔 출력만. 평소 파이프라인은 parse_description이
+    DB 적재까지 같이 하므로 이 함수는 backfill 시나리오에서만 사용.
 
     Returns: (success, skipped, failed)
     """
@@ -514,7 +495,6 @@ def upload(
     success = 0
     skipped = 0
     failed = 0
-    errors_log: list[dict] = []
 
     for i, filepath in enumerate(files, 1):
         key = filepath.stem
@@ -525,7 +505,6 @@ def upload(
                 data = json.load(f)
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             print(f"{prefix}: JSON 파싱 실패 - {e}")
-            errors_log.append({"key": key, "error": f"JSON 파싱 실패: {e}"})
             failed += 1
             continue
 
@@ -557,20 +536,8 @@ def upload(
                 skipped += 1
             else:
                 print(f"{prefix}: 적재 실패 - {error_msg}")
-                errors_log.append({"key": key, "error": error_msg})
                 failed += 1
 
     print(f"\n{'='*50}")
     print(f"[결과] 전체={len(files)} | 성공={success} | 스킵={skipped} | 실패={failed}")
-
-    if errors_log:
-        print(f"\n[실패 목록]")
-        for err in errors_log:
-            print(f"  - {err['key']}: {err['error']}")
-
-        error_log_path = parsed_dir / f"{LOAD_ERROR_PREFIX}{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(error_log_path, "w", encoding="utf-8") as f:
-            json.dump(errors_log, f, ensure_ascii=False, indent=2)
-        print(f"\n  에러 로그 저장: {error_log_path}")
-
     return success, skipped, failed

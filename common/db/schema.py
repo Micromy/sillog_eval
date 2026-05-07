@@ -14,6 +14,8 @@ PARSED_COLUMN_BYTES = {
     "task_manager_role": 1000,
     "task_manager_role_type": 100,
     "task_manager_job_category": 100,
+    "status": 20,
+    "failed_reason": 4000,
 }
 
 INPUT_COLUMN_BYTES = {
@@ -45,4 +47,6 @@ RESULT_COLUMN_BYTES = {
     "feedback": 4000,
     "review": 4000,
     "suggestion": 4000,
+    "status": 20,
+    "failed_reason": 4000,
 }

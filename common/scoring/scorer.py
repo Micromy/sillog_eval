@@ -1,29 +1,16 @@
-"""
-ScorerAsync v4 (함수형, 항목별 파일 저장)
+"""ScorerAsync — DB 직접 적재 버전.
 
-[기능 요약]
-- 정량 평가: raw 데이터 기반, 1회만 실행 (룰 기반)
-- 정성 평가: 평탄화 데이터 기반, 라운드별 실패 항목만 재평가
-- 감독관 검토: 호출 실패 시 retry (정상 미승인과 구분)
-- 총점: 균등 배점 (PASS=1.0, PARTIAL=0.5, FAIL=0.0)
-- 총평: 감독관 피드백 기반
-- 저장: 항목별 파일 분리 (DB 매핑 친화적, 부분 업데이트 용이)
+각 issue마다:
+1. lookup_task_id (Jira key → task_id). None이면 skip.
+2. insert_result_placeholder → task_eval_id (status='PENDING')
+3. 정량 평가 (rule registry) + 정성 평가 (LLM, 라운드 루프) + 감독관 검토
+4. 성공: populate_result로 본문/items/reviews INSERT + status='DONE'
+   실패: mark_result_failed로 status='FAILED' + failed_reason
 
-[저장 구조]
-{storage_dir}/{model_name}/
-  final/{key}/
-    _meta.json                              ← 전체 메타 (DB의 EVAL_TASK_RESULT)
-    items/{criterion}.json                  ← 항목별 결과 (EVAL_TASK_RESULT_ITEM)
-  iteration/{key}/
-    seq-N-round-M-{ts}.json                 ← 라운드별 스냅샷 (디버깅)
+retry까지 실패한 issue가 누적 SHUTDOWN_THRESHOLD에 도달하면 sys.exit(2).
 
-[부분 재평가]
-- quantitative_checklist / qualitative_checklist 인자에 변경된 체크리스트만 넘기면
-  해당 항목만 평가하고 나머지는 이전 결과 보존
-- eval_seq 자동 +1
-
-[설정]
-모든 기본값은 루트의 config.py에서 관리. 환경변수로 오버라이드 가능.
+[총점] 균등 배점 (PASS=1.0, PARTIAL=0.5, FAIL=0.0)
+[총평] 감독관 피드백 기반
 """
 import time
 import re
@@ -37,15 +24,17 @@ from .base import ChecklistResult, IssueScore
 from .evaluators.quantitative import QuantitativeEvaluator
 from .extractor import SillogDataExtractor
 from .agents import CriteriaRefiner, SupervisorAgent
-from .storage import (
-    save_item_result,
-    save_meta,
-    save_iteration,
-    load_previous_results,
-)
 from common.convert import to_raw_dict
 from common.constants import EvalMethod, PassFail, RuleType, SCORE_MAP
-from common.db.rules import load_rule_items
+from common import db
+from common.db.result import (
+    insert_result_placeholder,
+    lookup_task_id,
+    mark_result_failed,
+    populate_result,
+)
+from common.db.rules import load_rule_items, load_rule_item_id_map
+from common.shutdown import FailureCounter
 from common.config import (
     EVALUATE_PROMPT,
     DEFAULT_MAX_ROUNDS,
@@ -53,10 +42,10 @@ from common.config import (
     DEFAULT_RETRY_DELAY,
     DEFAULT_MAX_WORKERS,
     DEFAULT_MAX_QUAL_WORKERS,
-    STORAGE_DIR,
     LLM_TIMEOUT,
     QUAL_BATCH_FUTURE_TIMEOUT,
     ISSUE_TIMEOUT,
+    SHUTDOWN_THRESHOLD,
 )
 
 
@@ -200,7 +189,7 @@ def review_with_retry(
     max_retries=DEFAULT_MAX_RETRIES,
     retry_delay=DEFAULT_RETRY_DELAY,
 ):
-    """감독관 검토 (호출 실패 시 retry)
+    """감독관 검토 (호출 실패 시 retry).
 
     Returns:
         (approved, issues, feedback, supervisor_failed)
@@ -245,7 +234,7 @@ def build_summary(
     error_logs,
     supervisor_failed=False,
 ):
-    """감독관 피드백 기반 최종 총평 + 구조화된 메타 데이터
+    """감독관 피드백 기반 최종 총평 + 구조화된 메타.
 
     Returns:
         (summary_text: str, summary_struct: dict)
@@ -330,227 +319,265 @@ def build_summary(
 # ── 단일 Issue 평가 ────────────────────────────────
 
 def score_issue(
-    key,
-    sillog_data,
-    llm_pool,
-    model_name,
-    storage_dir=STORAGE_DIR,
-    quantitative_checklist=None,
-    qualitative_checklist=None,
-    max_rounds=DEFAULT_MAX_ROUNDS,
-    max_retries=DEFAULT_MAX_RETRIES,
-    max_qual_workers=DEFAULT_MAX_QUAL_WORKERS,
+    key: str,
+    sillog_data: Any,
+    llm_pool: list,
+    model_name: str,
+    run_id: str,
+    eval_rule_set_id: int,
+    target_quant: Dict[str, str],
+    target_qual: Dict[str, str],
+    rule_item_map: Dict[str, int],
+    eval_seq: int = 1,
+    max_rounds: int = DEFAULT_MAX_ROUNDS,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    max_qual_workers: int = DEFAULT_MAX_QUAL_WORKERS,
     progress_callback=None,
-):
-    """단일 Issue 평가 (디버깅/단건 처리용 외부 노출)"""
+) -> Optional[IssueScore]:
+    """단일 Issue 평가 + DB 적재.
+
+    Args:
+        target_quant: 정량 rule items {item_name: criteria_text}
+        target_qual:  정성 rule items {item_name: criteria_text}
+        rule_item_map: {item_name: eval_rule_item_id} (자식 적재용)
+
+    Returns:
+        IssueScore (DB 적재 성공 시) 또는 None (task_id 매핑 실패 시 skip).
+    """
     start_time = time.time()
 
-    target_quant = quantitative_checklist if quantitative_checklist is not None else load_rule_items(EvalMethod.RULE)
-    target_qual = qualitative_checklist if qualitative_checklist is not None else load_rule_items(EvalMethod.LLM)
+    # task_id 조회 (skip if 매핑 없음)
+    with db.cursor() as cur:
+        task_id = lookup_task_id(cur, key)
+    if task_id is None:
+        print(f"\n[{key}] task_id 매핑 실패 - skip (sillog_tasks_attr에 없음)")
+        return None
 
-    prev_meta, prev_quant_map, prev_qual_map = load_previous_results(storage_dir, model_name, key)
-    is_reevaluation = prev_meta is not None
-    eval_seq = (prev_meta.get("eval_seq", 0) + 1) if is_reevaluation else 1
+    # placeholder INSERT (status=PENDING) — 별도 트랜잭션
+    with db.cursor() as cur:
+        task_eval_id = insert_result_placeholder(
+            cur, task_id, eval_rule_set_id, eval_seq, model_name,
+        )
 
     raw_data = to_raw_dict(sillog_data)
     extracted_data = SillogDataExtractor.extract(sillog_data)
 
     print(f"\n{'='*60}")
-    mode_label = f"재평가 (seq={eval_seq})" if is_reevaluation else f"신규 평가 (seq=1)"
-    print(f"[{key}] {mode_label}")
+    print(f"[{key}] task_id={task_id} task_eval_id={task_eval_id} (seq={eval_seq})")
     print(f"  대상: 정량 {len(target_quant)}개 / 정성 {len(target_qual)}개")
     print(f"{'='*60}")
 
-    # 1. 정량 평가
-    print(f"  [정량 평가]...", end="")
-    new_quant_results = QuantitativeEvaluator().evaluate(target_quant, raw_data)
-    print(f" ✓ ({len(new_quant_results)}개 평가)")
+    try:
+        # 1. 정량 평가
+        print(f"  [정량 평가]...", end="")
+        quant_results = QuantitativeEvaluator().evaluate(target_quant, raw_data)
+        print(f" ✓ ({len(quant_results)}개 평가)")
 
-    quant_results_map = dict(prev_quant_map)
-    for r in new_quant_results:
-        quant_results_map[r.criterion_name] = r
-        save_item_result(storage_dir, model_name, key, r, RuleType.QUANTITATIVE, eval_seq)
-    quant_results = list(quant_results_map.values())
+        # 2. 정성 평가 (라운드 루프)
+        qual_refinements = {}
+        qual_results_map: Dict[str, ChecklistResult] = {}
+        target_qual_names = set(target_qual.keys())
+        all_error_logs: List[Dict] = []
+        review_history: List[Dict] = []
+        round_num = 1
 
-    # 2. 정성 평가 (라운드 루프)
-    qual_refinements = {}
-    qual_results_map: Dict[str, ChecklistResult] = dict(prev_qual_map)
-    target_qual_names = set(target_qual.keys())
-    all_error_logs: List[Dict] = []
-    review_history: List[Dict] = list(prev_meta.get("review_history", [])) if is_reevaluation else []
-    round_num = 1
+        last_feedback = ""
+        last_issues: List[Dict] = []
+        last_approved = False
+        supervisor_failed = False
 
-    last_feedback = ""
-    last_issues: List[Dict] = []
-    last_approved = False
-    supervisor_failed = False
+        for round_num in range(1, max_rounds + 1):
+            print(f"\n  --- Round {round_num} ---")
 
-    for round_num in range(1, max_rounds + 1):
-        print(f"\n  --- Round {round_num} ---")
+            if round_num == 1:
+                target_criteria = target_qual
+            else:
+                target_criteria = {
+                    name: target_qual[name]
+                    for name in target_qual_names
+                    if name in qual_results_map
+                    and (qual_results_map[name].pass_fail != PassFail.PASS
+                         or qual_results_map[name].reasoning.startswith("[ERROR]"))
+                }
+                if not target_criteria:
+                    print("  모든 항목 PASS. 재평가 불필요.")
+                    break
+                print(f"  재평가 대상: {len(target_criteria)}개 항목")
 
-        if round_num == 1:
-            target_criteria = target_qual
-        else:
-            target_criteria = {
-                name: target_qual[name]
-                for name in target_qual_names
-                if name in qual_results_map
-                and (qual_results_map[name].pass_fail != PassFail.PASS
-                     or qual_results_map[name].reasoning.startswith("[ERROR]"))
+            round_results, round_errors = evaluate_qualitative_batch(
+                extracted_data=extracted_data,
+                llm_pool=llm_pool,
+                target_criteria=target_criteria,
+                max_workers=max_qual_workers,
+                max_retries=max_retries,
+                criteria_refinements=qual_refinements,
+                progress_callback=progress_callback,
+            )
+            all_error_logs.extend(round_errors)
+
+            for r in round_results:
+                qual_results_map[r.criterion_name] = r
+
+            current_score = IssueScore(
+                key=key,
+                round_num=round_num,
+                quantitative_results=quant_results,
+                qualitative_results=list(qual_results_map.values()),
+                total_summary="",
+                criteria_refinement_suggestions={},
+                elapsed_time=0.0,
+            )
+
+            print(f"  [감독 Agent 검토]")
+            approved, issues, feedback, supervisor_failed = review_with_retry(
+                key, extracted_data, current_score, llm_pool,
+                round_idx=round_num - 1,
+                max_retries=max_retries,
+            )
+
+            review_entry = {
+                "round": round_num,
+                "eval_seq": eval_seq,
+                "approved": approved,
+                "supervisor_failed": supervisor_failed,
+                "issues": issues or [],
+                "feedback": feedback,
+                "timestamp": datetime.now().isoformat(),
             }
-            if not target_criteria:
-                print("  모든 항목 PASS. 재평가 불필요.")
+            review_history.append(review_entry)
+
+            last_feedback = feedback
+            last_issues = issues or []
+            last_approved = approved
+
+            if supervisor_failed:
+                print(f"  ✗ 감독관 검토 실패 - 현재 결과로 확정")
                 break
-            print(f"  재평가 대상: {len(target_criteria)}개 항목")
 
-        round_results, round_errors = evaluate_qualitative_batch(
-            extracted_data=extracted_data,
-            llm_pool=llm_pool,
-            target_criteria=target_criteria,
-            max_workers=max_qual_workers,
-            max_retries=max_retries,
-            criteria_refinements=qual_refinements,
-            progress_callback=progress_callback,
+            if approved:
+                print(f"  ✓ (승인)")
+                break
+
+            print(f"  ✗ (미승인)")
+            print(f"  피드백: {feedback}")
+
+            if round_num >= max_rounds:
+                print(f"  최대 라운드 도달.")
+                break
+
+            refiner_llm = llm_pool[round_num % len(llm_pool)]
+            print(f"  [criteria 고도화]...", end="")
+            refinement = CriteriaRefiner.refine(
+                key, extracted_data, current_score, refiner_llm,
+                stream_console_output=False,
+            )
+            qual_refinements = refinement.get("qualitative_refinements", {})
+            print(f" ✓ ({len(qual_refinements)}개)")
+
+        # 3. 최종 점수 + 총평
+        qual_results_final = list(qual_results_map.values())
+        final_score_value = calc_weighted_score(quant_results, qual_results_final)
+        elapsed = time.time() - start_time
+
+        summary_text, summary_struct = build_summary(
+            approved=last_approved,
+            feedback=last_feedback,
+            issues=last_issues,
+            final_score=final_score_value,
+            round_num=round_num,
+            quant_results=quant_results,
+            qual_results=qual_results_final,
+            error_logs=all_error_logs,
+            supervisor_failed=supervisor_failed,
         )
-        all_error_logs.extend(round_errors)
 
-        for r in round_results:
-            qual_results_map[r.criterion_name] = r
-            save_item_result(storage_dir, model_name, key, r, RuleType.QUALITATIVE, eval_seq)
+        # 4. DB 적재 (populate)
+        items_data = [
+            {
+                "criterion_name": r.criterion_name,
+                "pass_fail": r.pass_fail,
+                "reasoning": r.reasoning,
+            }
+            for r in (quant_results + qual_results_final)
+        ]
 
-        current_score = IssueScore(
+        with db.cursor() as cur:
+            populate_result(
+                cur,
+                task_eval_id=task_eval_id,
+                summary_struct=summary_struct,
+                total_summary=summary_text,
+                items=items_data,
+                review_history=review_history,
+                rule_item_map=rule_item_map,
+            )
+
+        print(f"\n  최종 점수: {final_score_value}점 | task_eval_id={task_eval_id} | 소요: {elapsed:.1f}초")
+
+        return IssueScore(
             key=key,
             round_num=round_num,
             quantitative_results=quant_results,
-            qualitative_results=list(qual_results_map.values()),
-            total_summary="",
-            criteria_refinement_suggestions={},
-            elapsed_time=0.0,
+            qualitative_results=qual_results_final,
+            total_summary=summary_text,
+            criteria_refinement_suggestions={"qualitative": qual_refinements},
+            elapsed_time=elapsed,
         )
 
-        print(f"  [감독 Agent 검토]")
-        approved, issues, feedback, supervisor_failed = review_with_retry(
-            key, extracted_data, current_score, llm_pool,
-            round_idx=round_num - 1,
-            max_retries=max_retries,
-        )
-
-        review_entry = {
-            "round": round_num,
-            "eval_seq": eval_seq,
-            "approved": approved,
-            "supervisor_failed": supervisor_failed,
-            "issues": issues or [],
-            "feedback": feedback,
-            "timestamp": datetime.now().isoformat(),
-        }
-        review_history.append(review_entry)
-
-        last_feedback = feedback
-        last_issues = issues or []
-        last_approved = approved
-
-        saved_iter = save_iteration(
-            storage_dir, model_name, key, eval_seq, round_num,
-            current_score, review_entry,
-        )
-
-        if supervisor_failed:
-            print(f"  ✗ 감독관 검토 실패 - 현재 결과로 확정")
-            print(f"  라운드 결과 저장: {saved_iter}")
-            break
-
-        if approved:
-            print(f"  ✓ (승인)")
-            print(f"  라운드 결과 저장: {saved_iter}")
-            break
-
-        print(f"  ✗ (미승인)")
-        print(f"  피드백: {feedback}")
-        print(f"  라운드 결과 저장: {saved_iter}")
-
-        if round_num >= max_rounds:
-            print(f"  최대 라운드 도달.")
-            break
-
-        refiner_llm = llm_pool[round_num % len(llm_pool)]
-        print(f"  [criteria 고도화]...", end="")
-        refinement = CriteriaRefiner.refine(
-            key, extracted_data, current_score, refiner_llm,
-            stream_console_output=False,
-        )
-        qual_refinements = refinement.get("qualitative_refinements", {})
-        print(f" ✓ ({len(qual_refinements)}개)")
-
-    # 3. 최종 점수 + 총평
-    qual_results_final = list(qual_results_map.values())
-    final_score_value = calc_weighted_score(quant_results, qual_results_final)
-    elapsed = time.time() - start_time
-
-    summary_text, summary_struct = build_summary(
-        approved=last_approved,
-        feedback=last_feedback,
-        issues=last_issues,
-        final_score=final_score_value,
-        round_num=round_num,
-        quant_results=quant_results,
-        qual_results=qual_results_final,
-        error_logs=all_error_logs,
-        supervisor_failed=supervisor_failed,
-    )
-
-    final = IssueScore(
-        key=key,
-        round_num=round_num,
-        quantitative_results=quant_results,
-        qualitative_results=qual_results_final,
-        total_summary=summary_text,
-        criteria_refinement_suggestions={"qualitative": qual_refinements},
-        elapsed_time=elapsed,
-    )
-
-    saved_meta = save_meta(
-        storage_dir, model_name, key, final, eval_seq, review_history,
-        summary_struct,
-    )
-    print(f"\n  최종 점수: {final_score_value}점 | seq={eval_seq} | 소요: {elapsed:.1f}초")
-    print(f"  저장: {saved_meta}")
-
-    return final
+    except Exception as e:
+        # 평가 도중 예외 — FAILED로 마킹하고 raise (호출자가 카운터 처리)
+        mark_result_failed(task_eval_id, f"score_issue 예외: {e}")
+        raise
 
 
 # ── 일괄 평가 ──────────────────────────────────────
 
 def score_issues_batch(
-    items,
-    llm_pool,
-    model_name,
-    storage_dir=STORAGE_DIR,
-    quantitative_checklist=None,
-    qualitative_checklist=None,
-    max_rounds=DEFAULT_MAX_ROUNDS,
-    max_retries=DEFAULT_MAX_RETRIES,
-    max_qual_workers=DEFAULT_MAX_QUAL_WORKERS,
-    max_workers=DEFAULT_MAX_WORKERS,
+    items: list,
+    llm_pool: list,
+    model_name: str,
+    run_id: str,
+    eval_rule_set_id: int,
+    eval_seq: int = 1,
+    max_rounds: int = DEFAULT_MAX_ROUNDS,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    max_qual_workers: int = DEFAULT_MAX_QUAL_WORKERS,
+    max_workers: int = DEFAULT_MAX_WORKERS,
     progress_callback=None,
-):
-    """여러 Issue 일괄 평가"""
+) -> List[IssueScore]:
+    """여러 Issue 일괄 평가.
+
+    각 issue마다 placeholder + populate(또는 mark_failed) 패턴으로 DB 직접 적재.
+    누적 실패 SHUTDOWN_THRESHOLD 도달 시 sys.exit(2).
+
+    Args:
+        items: [(source_issue_key, sillog_data_dict), ...]
+        run_id: parse 실행 ID (재개용)
+        eval_rule_set_id: DB의 활성 rule_set_id (caller가 결정)
+    """
     if not llm_pool:
         raise ValueError("llm_pool이 비어있습니다")
 
-    print(f"[ScorerAsync] LLM {len(llm_pool)}개 ({model_name}) | 최대 {max_rounds}라운드")
-    print(f"[일괄 평가] {len(items)}개 Issue | 동시 {max_workers}개")
+    # rule items 로드 (DB SOT)
+    target_quant = load_rule_items(EvalMethod.RULE)
+    target_qual = load_rule_items(EvalMethod.LLM)
+    rule_item_map, _ = load_rule_item_id_map()
 
-    results = []
+    print(f"[ScorerAsync] LLM {len(llm_pool)}개 ({model_name}) | 최대 {max_rounds}라운드")
+    print(f"  rule items: 정량 {len(target_quant)}개 / 정성 {len(target_qual)}개")
+    print(f"[일괄 평가] {len(items)}개 Issue | 동시 {max_workers}개 | run_id={run_id} | rsid={eval_rule_set_id}")
+
+    counter = FailureCounter(threshold=SHUTDOWN_THRESHOLD)
+    results: List[IssueScore] = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
                 score_issue,
                 key, data, llm_pool, model_name,
-                storage_dir,
-                quantitative_checklist, qualitative_checklist,
-                max_rounds, max_retries, max_qual_workers, progress_callback,
+                run_id, eval_rule_set_id,
+                target_quant, target_qual, rule_item_map,
+                eval_seq, max_rounds, max_retries, max_qual_workers, progress_callback,
             ): key
             for key, data in items
         }
@@ -562,16 +589,17 @@ def score_issues_batch(
 
             try:
                 result = future.result(timeout=ISSUE_TIMEOUT)
+                if result is None:
+                    # task_id 매핑 실패 — skip (셧다운 카운터에 포함 X)
+                    print(f"  [{completed}/{len(items)}] {key}: SKIP (task_id 매핑 없음)")
+                    continue
+                results.append(result)
+                counter.reset()
             except Exception as e:
-                result = IssueScore(
-                    key=key, round_num=0,
-                    quantitative_results=[], qualitative_results=[],
-                    total_summary=f"[FATAL] 평가 실패: {e}",
-                    criteria_refinement_suggestions={}, elapsed_time=0.0,
-                )
+                reason = f"FATAL 평가 실패: {e}"
                 print(f"  [{completed}/{len(items)}] {key}: FATAL ERROR - {e}")
+                if counter.bump_failure(reason) >= SHUTDOWN_THRESHOLD:
+                    counter.exit("score_issues")
 
-            results.append(result)
-
-    print(f"[일괄 평가] 완료 ({len(results)}건)")
+    print(f"[일괄 평가] 완료 ({len(results)}건 성공)")
     return results

@@ -344,6 +344,71 @@ refactor: rule item을 DB(eval_task_rule_item) SOT로 통합 + 정량 evaluator�
 
 ---
 
+### R-5. API 셧다운 + 재개 + DB SOT (로컬 결과 파일 제거) ✅
+
+LLM 서버 다운 시 무의미한 호출 누적 방지(셧다운) + 중단 후 재개 + DB가 처리 결과의 단일 SOT가 되도록 통합.
+
+**DDL 변경 (사내 DBA 적용 완료):**
+```sql
+ALTER TABLE eval_task_parsed ADD status VARCHAR2(20) DEFAULT 'PENDING' NOT NULL;
+ALTER TABLE eval_task_parsed ADD failed_reason VARCHAR2(4000);
+ALTER TABLE eval_task_result ADD status VARCHAR2(20) DEFAULT 'PENDING' NOT NULL;
+ALTER TABLE eval_task_result ADD failed_reason VARCHAR2(4000);
+CREATE INDEX idx_parsed_status_run ON eval_task_parsed (run_id, status);
+CREATE INDEX idx_result_status     ON eval_task_result (status);
+```
+
+**Status 값:**
+- `PENDING`: placeholder만 INSERT됨, 결과 미반영. 다음 실행에서 재처리.
+- `DONE`: 자식 테이블 INSERT까지 commit. terminal.
+- `FAILED`: retry 끝까지 실패. failed_reason에 원인 기록. terminal.
+
+**구현:**
+- `common/constants.py`: `Status` 클래스 추가
+- `common/config.py`: `SHUTDOWN_THRESHOLD` env (default 10)
+- `common/db/schema.py`: `status: 20`, `failed_reason: 4000` 컬럼 메타
+- `common/shutdown.py` (NEW): `FailureCounter` (thread-safe 누적 카운터, sys.exit 헬퍼)
+- `common/db/parsed.py`:
+  - `insert_parsed_placeholder(cur, run_id, source_issue_key, parser_version)` 신규
+  - `populate_parsed(cur, parsed_id, sillog_data)` 신규 (UPDATE + 자식 INSERT + status=DONE)
+  - `mark_parsed_failed(parsed_id, reason)` 신규
+  - `get_done_keys(run_id) -> set[str]` 신규 (재개용)
+  - `save_parsed`는 backfill용 wrapper로 유지 (placeholder + populate 한 트랜잭션)
+  - `upload()` 의 `_load_errors_*.json` 저장 제거
+- `common/db/result.py`:
+  - `insert_result_placeholder` / `populate_result` / `mark_result_failed` / `get_done_task_ids` 신규
+  - 기존 migrate 로직은 backfill용으로 유지 (자체 INSERT)
+- `common/jira/llm_parser.py`: DB 적재 + FailureCounter 통합. 시그니처에 `run_id`, `parser_version` 추가. `_parse_errors_*.json` 저장 제거.
+- `common/scoring/scorer.py`: 평가 끝에 `populate_result`로 DB 적재. `score_issue` / `score_issues_batch`에 `run_id`, `eval_rule_set_id`, `eval_seq` 추가. 라운드 스냅샷 / `_meta.json` / `items/*.json` 파일 저장 모두 제거. 재평가용 `load_previous_results` 의존도 제거.
+- `common/scoring/storage.py` 삭제 (사용처 없음)
+- `parse/parse_description.py`: `--run-id` 필수, 시작 시 `get_done_keys`로 skip 계산
+- `score/score_issues.py`: `--run-id`, `--eval-rule-set-id` 필수, parsed 데이터를 DB에서 직접 로드 (raw_json), `get_done_task_ids`로 skip
+- `cleanup/__init__.py`, `cleanup/cleanup_files.py` (NEW): jira_issues.pkl + 옛 디렉토리 정리
+- `common/cleanup.py` (NEW): `cleanup_storage(keep_pkl, dry_run)`
+
+**파일 구조 변화:**
+- 제거: `parsed/{key}.json`, `{model}/final/{key}/_meta.json`, `items/*.json`, `iteration/*.json`, `_parse_errors_*.json`, `_load_errors_*.json`
+- 유지: `jira_issues.pkl` (Jira fetch 캐시)
+
+**호출 예 (재개 동작):**
+```bash
+python -m run_task parse fetch_jira
+python -m run_task parse parse_description --run-id manual_20260507
+# Ctrl+C 또는 셧다운 시 PENDING row 일부 남음
+python -m run_task parse parse_description --run-id manual_20260507  # 재개 (DONE skip)
+
+python -m run_task score score_issues --run-id manual_20260507 --eval-rule-set-id 22
+# 위와 동일 패턴
+
+python -m run_task cleanup cleanup_files
+```
+
+```
+refactor: API 셧다운 + 재개 + DB SOT 통합 (placeholder/populate 패턴, 로컬 결과 파일 제거)
+```
+
+---
+
 ## 정리 규칙
 
 - 코드 변경 시 커밋 메시지 함께 기록
