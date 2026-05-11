@@ -29,6 +29,7 @@
 | **R-4. rule item DB SOT 통합 + Quantitative registry 패턴** | ✅ (2026-05-06) |
 | **R-5. API 셧다운 + 재개 + DB 직접 적재 (로컬 결과 파일 제거)** | ✅ (2026-05-07) |
 | **R-6. 항목별 target_fields — LLM 평가 필드 제한** | ✅ (2026-05-07) |
+| **R-7. 테스트 시나리오 + cleanup_test_db task** | ✅ (2026-05-11) |
 
 ### R-5: API 셧다운 + 재개 + DB SOT
 

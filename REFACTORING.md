@@ -466,6 +466,47 @@ refactor: 항목별 target_fields로 LLM 평가 필드 제한 ({context} placeho
 
 ---
 
+### R-7. 테스트 시나리오 + cleanup_test_db ✅
+
+사내에서 소량 issue로 안전하게 통합 테스트할 수 있는 시나리오 + 테스트 DB 정리 task.
+
+**신규 파일:**
+- `common/db/cleanup.py` — `cleanup_test_db(run_id_prefix, execute)` 헬퍼. run_id LIKE 접두 매칭으로 parsed* + 연결 result* 자식→부모 순 삭제. 최소 3자 prefix 강제, dry-run 기본.
+- `cleanup/cleanup_test_db.py` — task entry (argparse + 'DELETE' confirm)
+- `tests/` 디렉토리:
+  - `README.md` — 테스트 가이드
+  - `.env.example` — 테스트 env 템플릿
+  - `scenarios/_common.sh` — env 검증 + verify_status / cleanup 헬퍼 + Ctrl+C trap
+  - `scenarios/01_cold_path.sh` — cold path end-to-end (자동, 끝에 cleanup)
+  - `scenarios/02_resume.md` — 중단 후 재개 (수동 step-by-step)
+  - `scenarios/03_shutdown.sh` — LLM 토큰 무효화로 셧다운 트리거 검증
+  - `scenarios/04_target_fields.sh` — target_fields로 필드 제한 동작 검증
+  - `sql/verify_state.sql` — 상태 분포 / 실패 사유 / 정합성 / target_fields 점검 쿼리
+
+**격리 전략:**
+- 모든 test run_id는 `test_$(date)_$$` 형태 자동 생성 (운영과 충돌 없음)
+- `_common.sh`가 필수 env 변수 검증 후 trap으로 Ctrl+C 시에도 자동 cleanup
+- `TEST_EVAL_RULE_SET_ID`는 운영용과 분리 권장
+
+**호출 예:**
+```bash
+# 시나리오 실행
+source tests/.env
+bash tests/scenarios/01_cold_path.sh
+bash tests/scenarios/03_shutdown.sh
+bash tests/scenarios/04_target_fields.sh
+
+# 비정상 종료 시 수동 정리
+python run_task.py cleanup cleanup_test_db --run-id-prefix test_   # dry-run
+python run_task.py cleanup cleanup_test_db --run-id-prefix test_ --execute
+```
+
+```
+test: 사내 통합 테스트 시나리오 + cleanup_test_db task 추가
+```
+
+---
+
 ## 정리 규칙
 
 - 코드 변경 시 커밋 메시지 함께 기록
