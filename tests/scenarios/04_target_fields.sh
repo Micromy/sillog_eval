@@ -41,7 +41,7 @@ EOF
 
 echo ""
 echo "[Step 3] 파이프라인 실행"
-run_task parse fetch_jira
+run_fetch_jira
 run_task parse parse_description --run-id "${TEST_RUN_ID}"
 run_task score score_issues \
     --run-id "${TEST_RUN_ID}" \

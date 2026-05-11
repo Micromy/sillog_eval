@@ -12,7 +12,7 @@ echo "=========================================="
 
 # 중간에 멈추고 싶으면 Ctrl+C — trap이 cleanup_test_data 호출
 
-run_task parse fetch_jira
+run_fetch_jira
 
 run_task parse parse_description --run-id "${TEST_RUN_ID}"
 

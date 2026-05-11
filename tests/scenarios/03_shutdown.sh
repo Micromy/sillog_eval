@@ -12,7 +12,7 @@ echo "  SHUTDOWN_THRESHOLD = ${SHUTDOWN_THRESHOLD:-10}"
 echo "=========================================="
 
 # 사전 fetch (정상 토큰으로)
-run_task parse fetch_jira
+run_fetch_jira
 
 # 토큰 백업 후 무효 토큰으로
 ORIG_TOKEN="${DTGPT_TOKEN:-}"

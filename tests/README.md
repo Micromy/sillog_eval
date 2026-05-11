@@ -8,14 +8,16 @@
    ```bash
    export PLATFORM=DTGPT
    export DTGPT_URL=...  DTGPT_MODEL=...  DTGPT_TOKEN=...
-   export FILTER_ID=<테스트용 Jira filter (5~10건 매칭)>
    export ORACLE_USER=...  ORACLE_PASSWORD=...  ORACLE_DSN=...
    export SCORER_STORAGE_DIR=~/test_storage_eval
    export TEST_EVAL_RULE_SET_ID=<테스트용 eval_rule_set_id>
    export SHUTDOWN_THRESHOLD=3   # 테스트 중에는 빨리 트리거
    ```
 
-2. **테스트용 Jira filter**: 5~10건만 매칭되도록 작게. 운영용과 분리.
+2. **이슈 지정** — 둘 중 하나:
+   - `FILTER_ID=<Jira filter ID>`: 저장된 filter 사용 (filter UI로 키 관리)
+   - `TEST_JQL="key in (PROJ-1, PROJ-2, PROJ-3)"`: JQL 직접 지정 (filter 안 만들고 빠르게)
+   - 둘 다 있으면 `TEST_JQL` 우선 (시나리오의 `run_fetch_jira` 헬퍼가 처리)
 
 3. **테스트용 `eval_rule_set_id`**: 운영용과 분리되어 있으면 가장 안전.
 

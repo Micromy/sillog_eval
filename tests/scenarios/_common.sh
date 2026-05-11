@@ -7,7 +7,6 @@ set -euo pipefail
 # 필수 env 검증
 REQUIRED_VARS=(
     PLATFORM
-    FILTER_ID
     JIRA_URL JIRA_USERNAME JIRA_PASSWORD
     ORACLE_USER ORACLE_PASSWORD ORACLE_DSN
     SCORER_STORAGE_DIR
@@ -22,6 +21,12 @@ for var in "${REQUIRED_VARS[@]}"; do
     fi
 done
 
+# FILTER_ID 또는 TEST_JQL 중 하나는 있어야 함
+if [ -z "${FILTER_ID:-}" ] && [ -z "${TEST_JQL:-}" ]; then
+    echo "[ERROR] FILTER_ID 또는 TEST_JQL 둘 중 하나는 설정 필요" >&2
+    exit 1
+fi
+
 # run_id는 항상 test_ prefix (cleanup 안전)
 TEST_RUN_ID="test_$(date +%Y%m%d_%H%M%S)_$$"
 export TEST_RUN_ID
@@ -30,6 +35,15 @@ cd "$(dirname "$0")/../.."   # repo 루트로 이동
 
 run_task() {
     python run_task.py "$@"
+}
+
+# TEST_JQL이 있으면 --jql 사용, 없으면 FILTER_ID로 fallback
+run_fetch_jira() {
+    if [ -n "${TEST_JQL:-}" ]; then
+        run_task parse fetch_jira --jql "${TEST_JQL}"
+    else
+        run_task parse fetch_jira
+    fi
 }
 
 verify_status() {
